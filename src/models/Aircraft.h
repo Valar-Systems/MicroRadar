@@ -31,7 +31,15 @@ struct Aircraft {
 
 namespace JsonParser {
 
+    // OpenSky /states/all positional state-vector array.
     template<>
     Aircraft Parse<Aircraft>(const JsonVariant& state);
+
+    // One entry of a local receiver's dump1090-fa / readsb "aircraft.json" feed
+    // (object form). The local feed reports altitude in feet, ground speed in
+    // knots and vertical rate in ft/min, so this converts them to the OpenSky
+    // units (metres, m/s) the rest of the pipeline expects. Returns false when the
+    // entry carries no usable position yet, so the caller can skip it.
+    bool ParseLocalAircraft(JsonVariantConst entry, Aircraft& out);
 
 }

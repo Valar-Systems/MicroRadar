@@ -66,20 +66,48 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                 </label>
 
                 <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                    <span>OpenSkyAPI Client ID:</span>
-                    <input
-                        name="opensky-id"
-                        value='%OPENSKY_ID%'
+                    <span>Data source:</span>
+                    <select
+                        id="data-source"
+                        name="data-source"
                         class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                        <option value="opensky" %DATASRC_OPENSKY%>OpenSky Network (cloud)</option>
+                        <option value="local" %DATASRC_LOCAL%>My own ADS-B receiver</option>
+                    </select>
                 </label>
 
-                <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                    <span>OpenSkyAPI Client Secret:</span>
-                    <input
-                        name="opensky-secret"
-                        value='%OPENSKY_SECRET%'
-                        class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
-                </label>
+                <div id="opensky-fields" class="flex flex-col gap-4 sm:gap-2">
+                    <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                        <span>OpenSkyAPI Client ID:</span>
+                        <input
+                            name="opensky-id"
+                            value='%OPENSKY_ID%'
+                            class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+
+                    <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                        <span>OpenSkyAPI Client Secret:</span>
+                        <input
+                            name="opensky-secret"
+                            value='%OPENSKY_SECRET%'
+                            class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                </div>
+
+                <div id="local-fields" class="flex flex-col gap-1">
+                    <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                        <span>Receiver URL:</span>
+                        <input
+                            name="local-url"
+                            value='%LOCAL_URL%'
+                            placeholder="http://192.168.1.50/data/aircraft.json"
+                            class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                    <span class="text-xs text-green-700">
+                        dump1090-fa / readsb / PiAware / tar1090. Enter the device's IP (e.g. 192.168.1.50)
+                        or the full aircraft.json URL. No API limits &mdash; the radar updates once a second.
+                    </span>
+                </div>
 
                 <div class="flex flex-col sm:flex-row gap-4 sm:justify-between">
                     <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
@@ -205,7 +233,10 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                 </div>
             </form>
 
-            <div class="text-right text-xs text-green-700 mt-4">Firmware v%FW_VERSION%</div>
+            <div class="flex justify-between items-end text-xs text-green-700 mt-4">
+                <a href="https://github.com/Valar-Systems/Blipscope/wiki" target="_blank" rel="noopener" class="text-green-500 underline">Help &amp; documentation</a>
+                <span>Firmware v%FW_VERSION%</span>
+            </div>
         </fieldset>
 
         <script>
@@ -243,6 +274,20 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                 updateRadiusMax();
             });
             updateRadiusMax();
+
+            // show only the fields relevant to the selected data source. The hidden
+            // block's inputs still submit, but the firmware ignores whichever source
+            // isn't selected, so a leftover value does no harm.
+            const dataSource = document.getElementById('data-source');
+            const openskyFields = document.getElementById('opensky-fields');
+            const localFields = document.getElementById('local-fields');
+            function syncDataSource() {
+                const local = dataSource.value === 'local';
+                openskyFields.style.display = local ? 'none' : '';
+                localFields.style.display = local ? '' : 'none';
+            }
+            dataSource.addEventListener('change', syncDataSource);
+            syncDataSource();
 
             // dim the per-field list when the master Aircraft Info toggle is off.
             // purely cosmetic -- the inputs stay enabled so their state still saves.
@@ -286,6 +331,8 @@ void ConfigurationWebServer::Initialise() {
         const String radiusUnit = prefs.isKey("radius-unit") ? prefs.getString("radius-unit", "km") : "km";
         const String openskyClientId = prefs.getString("opensky-id", "");
         String openskySecret = prefs.getString("opensky-secret", "");
+        const String dataSource = prefs.isKey("data-source") ? prefs.getString("data-source", "opensky") : "opensky";
+        const String localUrl = prefs.getString("local-url", "");
         const String scanlineEnabled = prefs.getString("scanline", "true");
         const String infoTextEnabled = prefs.getString("infotext", "true");
         const String triangleEnabled = prefs.getString("triangle", "true");
@@ -326,7 +373,7 @@ void ConfigurationWebServer::Initialise() {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
-            [latitude, longitude, radius, radiusUnit, openskyClientId, openskySecret, scanlineEnabled, infoTextEnabled, triangleEnabled, trailEnabled, altColorEnabled, highlightEnabled, autoDimEnabled, brightness, tzOffset, watchlist, ntfyTopic, infoFieldsHtml]
+            [latitude, longitude, radius, radiusUnit, openskyClientId, openskySecret, dataSource, localUrl, scanlineEnabled, infoTextEnabled, triangleEnabled, trailEnabled, altColorEnabled, highlightEnabled, autoDimEnabled, brightness, tzOffset, watchlist, ntfyTopic, infoFieldsHtml]
             (const String& var) -> String {
                 if (var == "LATITUDE")       return latitude;
                 if (var == "LONGITUDE")      return longitude;
@@ -335,6 +382,9 @@ void ConfigurationWebServer::Initialise() {
                 if (var == "RADIUS_UNIT_MI") return radiusUnit == "mi" ? "selected" : "";
                 if (var == "OPENSKY_ID")     return openskyClientId;
                 if (var == "OPENSKY_SECRET") return openskySecret;
+                if (var == "DATASRC_OPENSKY") return dataSource == "local" ? "" : "selected";
+                if (var == "DATASRC_LOCAL")   return dataSource == "local" ? "selected" : "";
+                if (var == "LOCAL_URL")      return localUrl;
                 if (var == "SCANLINE")       return scanlineEnabled == "true" ? "checked" : "";
                 if (var == "INFOTEXT")       return infoTextEnabled == "true" ? "checked" : "";
                 if (var == "TRIANGLE")       return triangleEnabled == "true" ? "checked" : "";
@@ -383,6 +433,8 @@ void ConfigurationWebServer::Initialise() {
         TrySaveParam("watchlist");
         TrySaveParam("ntfy-topic");
         TrySaveParam("opensky-id");
+        TrySaveParam("data-source");
+        TrySaveParam("local-url");
 
         const auto* param = request->getParam("opensky-secret", true);
         if (param != nullptr) {

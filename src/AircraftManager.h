@@ -80,6 +80,13 @@ private:
     unsigned long fetchInterval = 0;
     unsigned long lastFetch = 999999;
 
+    // Data source. Default is the OpenSky cloud API; the user can instead point
+    // Blipscope at their own ADS-B receiver's dump1090-fa/readsb "aircraft.json"
+    // HTTP endpoint, which has no rate limit and updates ~1 Hz. The two sources
+    // are mutually exclusive (config selector), so only one feed is ever polled.
+    bool useLocalSource = false;
+    String localUrl = ""; // normalised aircraft.json URL, empty unless local
+
     // Background OpenSky states fetch. The HTTPS GET + JSON decode used to run
     // inline on the loop and stall it for a second or two each cycle; since touch
     // is only polled once per loop, a tap on a plane during that stall was missed.

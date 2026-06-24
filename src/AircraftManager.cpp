@@ -23,6 +23,8 @@ constexpr int LIST_ROWS = 9;
 struct FetchRequest {
     double lat, lon, radLat, radLon; // scan box, snapshotted on the loop task
     String token;                    // bearer token (empty = anonymous request)
+    bool   local = false;            // true: poll the local receiver instead of OpenSky
+    String url;                      // local aircraft.json URL (only when local)
 };
 struct FetchResult {
     bool ok = false;                 // false on network / parse failure
@@ -72,6 +74,29 @@ bool isNightNow(double latDeg, double lonDeg, time_t nowUtc)
     const double elevation = asin(sin(latRad) * sin(decl) + cos(latRad) * cos(decl) * cos(hourAngle));
 
     return degrees(elevation) < -0.833; // standard sunrise/sunset refraction angle
+}
+
+// Turn whatever the user typed for their receiver into a usable aircraft.json URL.
+// Accepts a bare host/IP ("192.168.1.50"), a base URL, or a full .json URL: we add
+// a default scheme and the conventional dump1090/readsb path only when they're
+// missing, so someone who pasted an exact URL is left untouched.
+String normalizeLocalUrl(String url)
+{
+    url.trim();
+    if (url.isEmpty())
+        return url;
+
+    if (url.indexOf("://") < 0)
+        url = "http://" + url;
+
+    String lower = url;
+    lower.toLowerCase();
+    if (lower.indexOf(".json") < 0) {
+        while (url.endsWith("/"))
+            url.remove(url.length() - 1);
+        url += "/data/aircraft.json";
+    }
+    return url;
 }
 
 } // namespace
@@ -153,18 +178,33 @@ void AircraftManager::Initialise()
     // a watchlist needs registration/type, so make sure metadata gets fetched
     if (!watchlist.empty()) metadataNeeded = true;
 
-    // calculate how often we can call OpenSky API before being rate limited
-    constexpr int MS_PER_DAY = 24 * 60 * 60 * 1000;
-    constexpr int ANONYMOUS_TOKENS_PER_DAY = 400;
-    constexpr int AUTHED_TOKENS_PER_DAY = 4000;
-    constexpr int TOKEN_BUFFER = 3;
-    int dailyRequestBudget = ANONYMOUS_TOKENS_PER_DAY - TOKEN_BUFFER; // non-authed tokens minus buffer
+    // data source: OpenSky cloud (default) or the user's own ADS-B receiver. The
+    // URL is normalised once here so the fetch task gets a ready-to-GET endpoint.
+    useLocalSource = configServer.GetStoredString("data-source") == "local";
+    localUrl = useLocalSource ? normalizeLocalUrl(configServer.GetStoredString("local-url")) : "";
 
-    const String token = authHandler.GetValidToken(configServer.GetStoredString("opensky-id"), configServer.GetStoredString("opensky-secret"));
-    if (!token.isEmpty())
-        dailyRequestBudget = AUTHED_TOKENS_PER_DAY - TOKEN_BUFFER; // authed tokens minus buffer
+    if (useLocalSource) {
+        // A local receiver has no API rate limit and refreshes about once a second;
+        // poll at that rate. The GET + parse runs on the background fetch task, so
+        // this cadence doesn't stall the render loop. No OpenSky token is needed.
+        constexpr unsigned long LOCAL_FETCH_INTERVAL = 1000;
+        fetchInterval = LOCAL_FETCH_INTERVAL;
+        Serial.printf("[source] local receiver: %s (every %lu ms)\n",
+                      localUrl.c_str(), fetchInterval);
+    } else {
+        // calculate how often we can call OpenSky API before being rate limited
+        constexpr int MS_PER_DAY = 24 * 60 * 60 * 1000;
+        constexpr int ANONYMOUS_TOKENS_PER_DAY = 400;
+        constexpr int AUTHED_TOKENS_PER_DAY = 4000;
+        constexpr int TOKEN_BUFFER = 3;
+        int dailyRequestBudget = ANONYMOUS_TOKENS_PER_DAY - TOKEN_BUFFER; // non-authed tokens minus buffer
 
-    fetchInterval = MS_PER_DAY / dailyRequestBudget;
+        const String token = authHandler.GetValidToken(configServer.GetStoredString("opensky-id"), configServer.GetStoredString("opensky-secret"));
+        if (!token.isEmpty())
+            dailyRequestBudget = AUTHED_TOKENS_PER_DAY - TOKEN_BUFFER; // authed tokens minus buffer
+
+        fetchInterval = MS_PER_DAY / dailyRequestBudget;
+    }
 
     // backlight brightness (PWM). Default full; clamp away from 0 so the screen
     // can't be saved completely dark. This is the daytime/base level; auto-dim
@@ -285,37 +325,55 @@ void AircraftManager::RunFetchTask()
 
         FetchResult* res = new FetchResult();
 
-        std::vector<std::pair<String, String>> headers = {};
-        if (!req->token.isEmpty()) headers.push_back({ "Authorization", "Bearer " + req->token });
+        // GET the feed: either the user's local receiver (no params/auth) or the
+        // OpenSky API bounded to the scan box. Both share the one HTTP client.
+        HttpResult result;
+        if (req->local) {
+            result = http.Get(req->url);
+        } else {
+            std::vector<std::pair<String, String>> headers = {};
+            if (!req->token.isEmpty()) headers.push_back({ "Authorization", "Bearer " + req->token });
 
-        // request via the shared HTTP client (HttpRequestManager's mutex serializes
-        // this with any loop-task request; see the fetch members in the header)
-        const HttpResult result = http.Get(
-            "https://opensky-network.org/api/states/all",
-            {
-              // 6 decimals (~0.1 m): String(double) defaults to only 2, which would
-              // quantize small km/mi radii into a coarse ~1 km box or collapse it
-              {"lamin", String(req->lat - req->radLat, 6)},
-              {"lamax", String(req->lat + req->radLat, 6)},
-              {"lomin", String(req->lon - req->radLon, 6)},
-              {"lomax", String(req->lon + req->radLon, 6)},
-              // category (state vector index 17) is omitted from the default
-              // response; without extended=1 the array stops at index 16 and the
-              // Category info line is always blank
-              {"extended", "1"}
-            },
-            headers
-        );
+            result = http.Get(
+                "https://opensky-network.org/api/states/all",
+                {
+                  // 6 decimals (~0.1 m): String(double) defaults to only 2, which would
+                  // quantize small km/mi radii into a coarse ~1 km box or collapse it
+                  {"lamin", String(req->lat - req->radLat, 6)},
+                  {"lamax", String(req->lat + req->radLat, 6)},
+                  {"lomin", String(req->lon - req->radLon, 6)},
+                  {"lomax", String(req->lon + req->radLon, 6)},
+                  // category (state vector index 17) is omitted from the default
+                  // response; without extended=1 the array stops at index 16 and the
+                  // Category info line is always blank
+                  {"extended", "1"}
+                },
+                headers
+            );
+        }
 
+        const char* sourceName = req->local ? "Local ADS-B" : "OpenSky";
         if (!result.success) {
-            Serial.print("[WARN] OpenSky API request failed: ");
-            Serial.println(result.errorMessage);
+            Serial.printf("[WARN] %s request failed: %s\n", sourceName, result.errorMessage.c_str());
         } else {
             JsonDocument doc;
             const DeserializationError err = deserializeJson(doc, result.response);
             if (err) {
-                Serial.print("[WARN] OpenSky response JSON parse failed: ");
-                Serial.println(err.f_str());
+                Serial.printf("[WARN] %s response JSON parse failed: %s\n", sourceName, err.f_str());
+            } else if (req->local) {
+                // dump1090/readsb returns objects under "aircraft"; convert each and
+                // clip to the scan box ourselves (OpenSky does this server-side, but a
+                // local receiver reports everything it hears).
+                for (JsonVariantConst entry : doc["aircraft"].as<JsonArrayConst>()) {
+                    Aircraft ac;
+                    if (!JsonParser::ParseLocalAircraft(entry, ac))
+                        continue;
+                    if (ac.latitude  < req->lat - req->radLat || ac.latitude  > req->lat + req->radLat ||
+                        ac.longitude < req->lon - req->radLon || ac.longitude > req->lon + req->radLon)
+                        continue;
+                    res->aircraft.push_back(ac);
+                }
+                res->ok = true;
             } else {
                 res->aircraft = JsonParser::ParseArray<Aircraft>(doc["states"]);
                 res->ok = true;
@@ -335,13 +393,24 @@ void AircraftManager::RequestFetch()
 {
     FetchRequest* req = new FetchRequest();
     req->lat = lat; req->lon = lon; req->radLat = radLat; req->radLon = radLon;
+    req->local = useLocalSource;
 
-    // Token lookup is normally instant (cached); it only blocks the loop on the rare
-    // ~29-minute refresh, so it stays here rather than racing the fetch task's client.
-    req->token = authHandler.GetValidToken(
-        configServer.GetStoredString("opensky-id"),
-        configServer.GetStoredString("opensky-secret")
-    );
+    if (useLocalSource) {
+        // local receiver: no auth, no token lookup. Skip entirely if no URL is set
+        // yet (local selected but the field left blank) rather than GET an empty URL.
+        if (localUrl.isEmpty()) {
+            delete req;
+            return;
+        }
+        req->url = localUrl;
+    } else {
+        // Token lookup is normally instant (cached); it only blocks the loop on the rare
+        // ~29-minute refresh, so it stays here rather than racing the fetch task's client.
+        req->token = authHandler.GetValidToken(
+            configServer.GetStoredString("opensky-id"),
+            configServer.GetStoredString("opensky-secret")
+        );
+    }
 
     if (xQueueSend(fetchRequestQueue, &req, 0) == pdTRUE)
         fetchInFlight = true;

@@ -65,6 +65,7 @@ There you can set:
 
 - **Location** (latitude and longitude) — the centre point of your radar.
 - **Radar radius** — how far the scan extends, in km or miles (capped at ~222 km / 138 mi to stay within data rate limits).
+- **Data source** — pull flight data from the OpenSky Network (the cloud default) or from your own ADS-B receiver on the local network (see below).
 - **Display options** — toggle the on-screen elements and aircraft info fields.
 - **Watchlist & alerts** — tail numbers to watch and the ntfy topic to notify.
 - **OpenSky credentials** — your client ID and secret (optional, but recommended).
@@ -74,6 +75,31 @@ The config page is available any time the device is on WiFi, so you can tweak se
 ### A note on OpenSky
 
 Blipscope uses [OpenSky Network's](https://opensky-network.org) free API for flight data. It works without an account, but making one (it's free) raises your daily request limit from 400 to 4000, which makes the live view far more accurate. Grab your client ID and secret from your OpenSky account settings and enter them on the config page.
+
+### Using your own ADS-B receiver
+
+If you run your own ADS-B receiver — a Raspberry Pi with [dump1090-fa](https://github.com/flightaware/dump1090), [readsb](https://github.com/wiedehopf/readsb), [PiAware](https://www.flightaware.com/adsb/piaware/), [tar1090](https://github.com/wiedehopf/tar1090), or an ADS-B Exchange feeder image — Blipscope can read directly from it instead of OpenSky. Local data has **no rate limits** and refreshes about once a second, so the radar is smoother and more accurate, and works even if OpenSky is down.
+
+#### Don't have a receiver yet?
+
+A receiver is three things: an **SDR USB dongle**, a **1090 MHz antenna**, and **decoder software** on a Raspberry Pi (any Pi 2 or newer — even a Pi Zero 2 W — is plenty; the decoder is light).
+
+- **Recommended starter:** a [Nooelec NESDR SMArt v5](https://www.nooelec.com/store/nesdr-smart-sdr.html) dongle plus a [Nooelec 1090 MHz ADS-B antenna](https://www.nooelec.com/store/sdr/sdr-addons/1090mhz-ads-b-antenna-5dbi-sma.html). Both ends are SMA, so they screw straight together with no adapter, and the pair runs well under the price of an all-in-one kit. In an RF-noisy spot you can add a [1090 MHz band-pass filter](https://www.nooelec.com/store/sdr/sdr-addons/) later, but try without one first.
+- **If you can find one — better filtering:** a [FlightAware Pro Stick Plus](https://www.flightaware.com/adsb/prostick/) has a 1090 MHz filter + amp built in, so it shrugs off nearby noise. Pair it with the same SMA antenna above (no adapter needed). It's frequently out of stock, so don't wait on it if the Nooelec combo is available.
+
+> Avoid the **RTL-SDR Blog V4** kit — its tuner chip was discontinued, so remaining stock sells at inflated prices. The **RTL-SDR Blog V3** (still in production) is a fine dongle if you already have one, but you'd still need to add a 1090 MHz antenna.
+
+> The biggest factor for range is **antenna height and sky view**, not the dongle — a cheap antenna in an attic or upstairs window beats an expensive one on a desk.
+
+For software, the quickest path is to flash the **[PiAware](https://www.flightaware.com/adsb/piaware/) SD-card image**: it bundles `dump1090-fa`, which serves exactly the feed Blipscope reads, and it earns you a free FlightAware account for feeding. Once it's running, check the receiver's map in a browser at `http://<pi-ip>:8080/` to confirm it's seeing aircraft.
+
+#### Pointing Blipscope at it
+
+On the config page, set **Data source** to *My own ADS-B receiver* and enter your receiver's address in **Receiver URL**. You can type just the device's IP (for example `192.168.1.50`) and Blipscope will assume the conventional `/data/aircraft.json` path, or paste the full URL if your setup serves it elsewhere (e.g. `http://192.168.1.50/tar1090/data/aircraft.json`). The receiver must be reachable on the same network as Blipscope.
+
+PiAware / dump1090-fa serve the data on **port 8080**, so enter `http://<pi-ip>:8080` for those — Blipscope appends `/data/aircraft.json` to give `http://<pi-ip>:8080/data/aircraft.json`. If in doubt, open the receiver's map in a browser and use whatever base address it serves from, with `/data/aircraft.json` on the end.
+
+> Altitudes and speeds in the receiver's feed are reported in feet and knots; Blipscope converts them so the display matches the OpenSky readings (metres and m/s). Aircraft outside your configured radius are filtered out the same way OpenSky bounds its results.
 
 That's it — once configured, you'll have a live view of everything flying over your location. Enjoy ✈️
 
