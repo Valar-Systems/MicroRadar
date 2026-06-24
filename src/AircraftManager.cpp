@@ -200,6 +200,20 @@ void AircraftManager::Update()
     // handle taps every loop so the UI stays responsive between fetches
     HandleTouch();
 
+    // While the detail card is open the radar isn't visible and the user is
+    // interacting, so skip all the blocking background network work below (radar
+    // metadata enrichment, watchlist alerts, and the periodic OpenSky fetch).
+    // Each of those stalls the loop for up to a few seconds inside a synchronous
+    // HTTP request, and the touch panel is only polled once per loop -- so a quick
+    // "tap to close" that landed during one of those stalls was simply never
+    // sampled, which is what made it take two or three taps. Bailing out here
+    // keeps the loop fast while a card is up, so a dismiss tap registers the first
+    // time. The card's own fields are still filled by ProcessDetailLookups()
+    // above, and normal fetching resumes the instant the card closes (lastFetch is
+    // already stale, so the next Update() refreshes immediately).
+    if (inDetail)
+        return;
+
     // enrich a tracked aircraft with adsbdb metadata (throttled internally)
     ProcessMetadataLookups();
 
