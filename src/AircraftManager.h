@@ -12,6 +12,9 @@
 #include "ConfigurationWebServer.h"
 #include "OpenSkyAuthTokenHandler.h"
 #include "AircraftInfoFields.h"
+#include "SpecialAircraft.h"
+#include "Logbook.h"
+#include "MqttPublisher.h"
 #include "LGFX.h"
 
 class AircraftManager
@@ -76,6 +79,36 @@ private:
     std::vector<String> watchlist;
     String ntfyTopic = "";
     unsigned long lastNotifyCheck = 0;
+
+    // Special-aircraft detection. Every class is derived offline from the live
+    // feed (ICAO address / emitter category / callsign), so it works on any data
+    // source and even with all adsbdb enrichment disabled.
+    bool showMilitary = true;     // ring + "MIL" tag military contacts on radar/list
+    bool alertMilitary = false;   // also raise an ntfy flyover alert for them
+    bool showHelicopters = false; // ring + "HELI" tag rotorcraft
+    bool showSpecial = false;     // ring + "SPC" tag distinctive callsigns
+
+    // "Look up!" overhead alert: flag a contact passing within overheadKm of the
+    // centre so you can physically glance up and spot it.
+    bool showOverhead = false;    // pulsing "LOOK UP" ring on the radar
+    bool alertOverhead = false;   // also raise an ntfy alert
+    double overheadKm = 3.0;      // how close to the centre counts as "overhead"
+
+    // Spotting logbook ("lifelist"): persistent tally of unique types/airlines/
+    // countries seen. Opt-in, because it forces an adsbdb lookup on every contact
+    // (to learn the type/airline) and writes to flash. Country + contact odometer
+    // work from the OpenSky feed alone.
+    Logbook logbook;
+    bool logbookEnabled = false;
+
+    // Home Assistant / MQTT. The publisher runs on its own task; we just hand it a
+    // retained JSON "summary" (count, nearest, overhead/military flags) every few
+    // seconds, plus the HA discovery configs on (re)connect so sensors auto-create.
+    MqttPublisher mqtt;
+    bool mqttEnabled = false;
+    bool mqttDiscovery = true;
+    String mqttBase = "blipscope";
+    unsigned long lastMqttState = 0;
 
     unsigned long fetchInterval = 0;
     unsigned long lastFetch = 999999;
@@ -155,8 +188,20 @@ private:
     void LookupAircraftMetadata(const String& icao24, TrackedAircraft& tracked);
 
     bool MatchesWatchlist(const TrackedAircraft& tracked) const;
-    void ProcessWatchlistNotifications();
-    void SendFlyoverNotification(const TrackedAircraft& tracked);
+    bool IsOverhead(const TrackedAircraft& tracked) const; // within overheadKm of the centre
+    void ProcessAlerts();                                  // ntfy: flyover + overhead, throttled
+    void SendFlyoverNotification(const TrackedAircraft& tracked, bool military = false);
+    void SendOverheadNotification(const TrackedAircraft& tracked);
+    void DrawOverheadAlert(LGFX_Sprite& backbuffer, int x, int y) const;
+
+    void PublishMqttState();     // retained JSON summary of the current picture
+    void PublishMqttDiscovery(); // Home Assistant MQTT discovery configs (retained)
+
+    // Toggle-aware special classification + its display colour, shared by the
+    // radar, list, and detail views. Honors the per-class show toggles and the
+    // priority order in SpecialAircraft::Class.
+    SpecialAircraft::Class SpecialClassOf(const TrackedAircraft& tracked) const;
+    static uint32_t SpecialColor(SpecialAircraft::Class c);
 
 public:
     AircraftManager(ConfigurationWebServer& config, OpenSkyAuthTokenHandler& auth, HttpRequestManager& httpManager, LGFX& tftGfx)
