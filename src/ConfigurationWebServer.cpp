@@ -215,6 +215,113 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                             value='%NTFY_TOPIC%'
                             class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
                     </label>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+                        <label class="flex items-center gap-2">
+                            <input name="mil-show" type="checkbox" %MIL_SHOW% class="accent-green-500">
+                            <span>Highlight military</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input name="mil-alert" type="checkbox" %MIL_ALERT% class="accent-green-500">
+                            <span>Alert on military (ntfy)</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input name="heli-show" type="checkbox" %HELI_SHOW% class="accent-green-500">
+                            <span>Highlight helicopters</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input name="spc-show" type="checkbox" %SPC_SHOW% class="accent-green-500">
+                            <span>Highlight special flights</span>
+                        </label>
+                    </div>
+                    <span class="text-xs text-green-700 mt-1">
+                        Detected offline from the live feed &mdash; no account or lookup needed. On the radar:
+                        military = orange &ldquo;MIL&rdquo;, special flights (rescue / police / NASA / Boeing / Airbus test &hellip;) = blue &ldquo;SPC&rdquo;,
+                        helicopters = violet &ldquo;HELI&rdquo;.
+                    </span>
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-2 mt-3">
+                        <label class="flex items-center gap-2">
+                            <input name="lookup" type="checkbox" %LOOKUP% class="accent-green-500">
+                            <span>&ldquo;Look up!&rdquo; overhead alert within</span>
+                        </label>
+                        <input
+                            name="lookup-dist"
+                            type="number"
+                            min="0.5"
+                            step="0.5"
+                            value='%LOOKUP_DIST%'
+                            class="border border-green-500 bg-gray-900 w-24 px-2 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                        <label class="flex items-center gap-2">
+                            <input name="lookup-alert" type="checkbox" %LOOKUP_ALERT% class="accent-green-500">
+                            <span>also ntfy</span>
+                        </label>
+                    </div>
+                    <span class="text-xs text-green-700 mt-1">
+                        Flashes a cyan &ldquo;LOOK UP&rdquo; ring when a contact passes within that distance (in your radar's units) of your location &mdash; glance up and spot it.
+                    </span>
+                </fieldset>
+
+                <fieldset class="border border-green-500 p-3">
+                    <legend class="px-2">
+                        <label class="flex items-center gap-2">
+                            <span>Spotting logbook</span>
+                            <input name="logbook" type="checkbox" %LOGBOOK% class="accent-green-500">
+                        </label>
+                    </legend>
+                    <span class="text-xs text-green-700">
+                        Keeps a running &ldquo;lifelist&rdquo; of every unique aircraft type, airline, and country
+                        you've seen overhead (shown on the Stats screen), and flags a gold &ldquo;NEW&rdquo; on first
+                        sightings. It looks up each contact's type/airline, so it adds a little network traffic.
+                    </span>
+                </fieldset>
+
+                <fieldset class="border border-green-500 p-3">
+                    <legend class="px-2">
+                        <label class="flex items-center gap-2">
+                            <span>Home Assistant / MQTT</span>
+                            <input name="mqtt" type="checkbox" %MQTT% class="accent-green-500">
+                        </label>
+                    </legend>
+                    <div class="flex flex-col gap-3 sm:gap-2">
+                        <div class="flex flex-col sm:flex-row gap-3 sm:gap-5">
+                            <label class="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
+                                <span>Broker:</span>
+                                <input name="mqtt-host" value='%MQTT_HOST%' placeholder="192.168.1.10"
+                                    class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                            </label>
+                            <label class="flex flex-col sm:flex-row sm:items-center gap-2">
+                                <span>Port:</span>
+                                <input name="mqtt-port" type="number" min="1" max="65535" value='%MQTT_PORT%'
+                                    class="border border-green-500 bg-gray-900 w-24 px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                            </label>
+                        </div>
+                        <div class="flex flex-col sm:flex-row gap-3 sm:gap-5">
+                            <label class="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
+                                <span>Username:</span>
+                                <input name="mqtt-user" value='%MQTT_USER%'
+                                    class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                            </label>
+                            <label class="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
+                                <span>Password:</span>
+                                <input name="mqtt-pass" value='%MQTT_PASS%'
+                                    class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                            </label>
+                        </div>
+                        <div class="flex flex-col sm:flex-row gap-3 sm:gap-5 sm:items-center">
+                            <label class="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
+                                <span>Base topic:</span>
+                                <input name="mqtt-base" value='%MQTT_BASE%' placeholder="blipscope"
+                                    class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                            </label>
+                            <label class="flex items-center gap-2">
+                                <input name="mqtt-disco" type="checkbox" %MQTT_DISCO% class="accent-green-500">
+                                <span>HA auto-discovery</span>
+                            </label>
+                        </div>
+                    </div>
+                    <span class="text-xs text-green-700 mt-2 block">
+                        Publishes a retained &ldquo;&lt;base&gt;/summary&rdquo; (count, nearest aircraft, overhead &amp; military flags)
+                        to your broker every few seconds. With auto-discovery on, Home Assistant creates the sensors automatically.
+                    </span>
                 </fieldset>
 
                 <div class="flex flex-col sm:flex-row gap-4 sm:gap-5">
@@ -347,6 +454,22 @@ void ConfigurationWebServer::Initialise() {
             : String((int)round(longitude.toFloat() / 15.0));
         const String watchlist = prefs.getString("watchlist", "");
         const String ntfyTopic = prefs.getString("ntfy-topic", "");
+        // isKey() guards keep the not-yet-saved reads from logging NVS NOT_FOUND
+        const String milShow = prefs.isKey("mil-show") ? prefs.getString("mil-show", "true") : "true";
+        const String milAlert = prefs.isKey("mil-alert") ? prefs.getString("mil-alert", "false") : "false";
+        const String heliShow = prefs.isKey("heli-show") ? prefs.getString("heli-show", "false") : "false";
+        const String spcShow = prefs.isKey("spc-show") ? prefs.getString("spc-show", "false") : "false";
+        const String logbookOn = prefs.isKey("logbook") ? prefs.getString("logbook", "false") : "false";
+        const String lookupOn = prefs.isKey("lookup") ? prefs.getString("lookup", "false") : "false";
+        const String lookupAlert = prefs.isKey("lookup-alert") ? prefs.getString("lookup-alert", "false") : "false";
+        const String lookupDist = prefs.isKey("lookup-dist") ? prefs.getString("lookup-dist", "3") : "3";
+        const String mqttOn = prefs.isKey("mqtt") ? prefs.getString("mqtt", "false") : "false";
+        const String mqttHost = prefs.getString("mqtt-host", "");
+        const String mqttPort = prefs.isKey("mqtt-port") ? prefs.getString("mqtt-port", "1883") : "1883";
+        const String mqttUser = prefs.getString("mqtt-user", "");
+        String mqttPass = prefs.getString("mqtt-pass", "");
+        const String mqttBase = prefs.isKey("mqtt-base") ? prefs.getString("mqtt-base", "blipscope") : "blipscope";
+        const String mqttDisco = prefs.isKey("mqtt-disco") ? prefs.getString("mqtt-disco", "true") : "true";
 
         // Build the per-field info checkboxes from the shared table so the form
         // always reflects exactly the fields the renderer knows how to draw.
@@ -366,14 +489,15 @@ void ConfigurationWebServer::Initialise() {
         }
         prefs.end();
 
-        // mask secret before sending to client
+        // mask secrets before sending to client
         std::fill(openskySecret.begin(), openskySecret.end(), '*');
+        std::fill(mqttPass.begin(), mqttPass.end(), '*');
 
         // template processor called once per %PLACEHOLDER% token found in CONFIG_HTML.
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
-            [latitude, longitude, radius, radiusUnit, openskyClientId, openskySecret, dataSource, localUrl, scanlineEnabled, infoTextEnabled, triangleEnabled, trailEnabled, altColorEnabled, highlightEnabled, autoDimEnabled, brightness, tzOffset, watchlist, ntfyTopic, infoFieldsHtml]
+            [latitude, longitude, radius, radiusUnit, openskyClientId, openskySecret, dataSource, localUrl, scanlineEnabled, infoTextEnabled, triangleEnabled, trailEnabled, altColorEnabled, highlightEnabled, autoDimEnabled, brightness, tzOffset, watchlist, ntfyTopic, milShow, milAlert, heliShow, spcShow, logbookOn, lookupOn, lookupAlert, lookupDist, mqttOn, mqttHost, mqttPort, mqttUser, mqttPass, mqttBase, mqttDisco, infoFieldsHtml]
             (const String& var) -> String {
                 if (var == "LATITUDE")       return latitude;
                 if (var == "LONGITUDE")      return longitude;
@@ -396,6 +520,21 @@ void ConfigurationWebServer::Initialise() {
                 if (var == "TZ_OFFSET")      return tzOffset;
                 if (var == "WATCHLIST")      return watchlist;
                 if (var == "NTFY_TOPIC")     return ntfyTopic;
+                if (var == "MIL_SHOW")       return milShow == "true" ? "checked" : "";
+                if (var == "MIL_ALERT")      return milAlert == "true" ? "checked" : "";
+                if (var == "HELI_SHOW")      return heliShow == "true" ? "checked" : "";
+                if (var == "SPC_SHOW")       return spcShow == "true" ? "checked" : "";
+                if (var == "LOGBOOK")        return logbookOn == "true" ? "checked" : "";
+                if (var == "LOOKUP")         return lookupOn == "true" ? "checked" : "";
+                if (var == "LOOKUP_ALERT")   return lookupAlert == "true" ? "checked" : "";
+                if (var == "LOOKUP_DIST")    return lookupDist;
+                if (var == "MQTT")           return mqttOn == "true" ? "checked" : "";
+                if (var == "MQTT_HOST")      return mqttHost;
+                if (var == "MQTT_PORT")      return mqttPort;
+                if (var == "MQTT_USER")      return mqttUser;
+                if (var == "MQTT_PASS")      return mqttPass;
+                if (var == "MQTT_BASE")      return mqttBase;
+                if (var == "MQTT_DISCO")     return mqttDisco == "true" ? "checked" : "";
                 if (var == "INFO_FIELDS")    return infoFieldsHtml;
                 if (var == "FW_VERSION")     return String(FW_VERSION);
                 return "";
@@ -435,6 +574,11 @@ void ConfigurationWebServer::Initialise() {
         TrySaveParam("opensky-id");
         TrySaveParam("data-source");
         TrySaveParam("local-url");
+        TrySaveParam("lookup-dist");
+        TrySaveParam("mqtt-host");
+        TrySaveParam("mqtt-port");
+        TrySaveParam("mqtt-user");
+        TrySaveParam("mqtt-base");
 
         const auto* param = request->getParam("opensky-secret", true);
         if (param != nullptr) {
@@ -444,6 +588,14 @@ void ConfigurationWebServer::Initialise() {
             }
         }
 
+        // MQTT password: same masked-value handling as the OpenSky secret
+        const auto* mqttPassParam = request->getParam("mqtt-pass", true);
+        if (mqttPassParam != nullptr) {
+            const String& pass = mqttPassParam->value();
+            if (pass.indexOf('*') == -1)
+                prefs.putString("mqtt-pass", pass);
+        }
+
         prefs.putString("scanline", request->hasParam("scanline", true) ? "true" : "false");
         prefs.putString("triangle", request->hasParam("triangle", true) ? "true" : "false");
         prefs.putString("trail", request->hasParam("trail", true) ? "true" : "false");
@@ -451,6 +603,15 @@ void ConfigurationWebServer::Initialise() {
         prefs.putString("highlight", request->hasParam("highlight", true) ? "true" : "false");
         prefs.putString("autodim", request->hasParam("autodim", true) ? "true" : "false");
         prefs.putString("infotext", request->hasParam("infotext", true) ? "true" : "false");
+        prefs.putString("mil-show", request->hasParam("mil-show", true) ? "true" : "false");
+        prefs.putString("mil-alert", request->hasParam("mil-alert", true) ? "true" : "false");
+        prefs.putString("heli-show", request->hasParam("heli-show", true) ? "true" : "false");
+        prefs.putString("spc-show", request->hasParam("spc-show", true) ? "true" : "false");
+        prefs.putString("logbook", request->hasParam("logbook", true) ? "true" : "false");
+        prefs.putString("lookup", request->hasParam("lookup", true) ? "true" : "false");
+        prefs.putString("lookup-alert", request->hasParam("lookup-alert", true) ? "true" : "false");
+        prefs.putString("mqtt", request->hasParam("mqtt", true) ? "true" : "false");
+        prefs.putString("mqtt-disco", request->hasParam("mqtt-disco", true) ? "true" : "false");
 
         // an unchecked checkbox isn't sent in the form body, so hasParam() is the
         // on/off signal for each individual info field

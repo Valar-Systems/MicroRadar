@@ -4,6 +4,9 @@
 #include <cmath>
 #include <time.h>
 
+#include "SpecialAircraft.h"
+#include "DeviceIdentity.h"
+
 constexpr int SCREEN_SIZE = 240;
 constexpr int SCREEN_SIZE_DIV_2 = (SCREEN_SIZE / 2);
 
@@ -178,6 +181,52 @@ void AircraftManager::Initialise()
     // a watchlist needs registration/type, so make sure metadata gets fetched
     if (!watchlist.empty()) metadataNeeded = true;
 
+    // military / special-aircraft detection (offline, ICAO-address based; needs no
+    // enrichment). Highlighting defaults on; the ntfy alert defaults off.
+    const String milShow = configServer.GetStoredString("mil-show");
+    showMilitary = milShow.isEmpty() ? true : (milShow == "true");
+    const String milAlert = configServer.GetStoredString("mil-alert");
+    alertMilitary = milAlert.isEmpty() ? false : (milAlert == "true");
+    const String heliShow = configServer.GetStoredString("heli-show");
+    showHelicopters = heliShow.isEmpty() ? false : (heliShow == "true");
+    const String spcShow = configServer.GetStoredString("spc-show");
+    showSpecial = spcShow.isEmpty() ? false : (spcShow == "true");
+
+    // spotting logbook: when on, learn each contact's type/airline (so it needs
+    // the adsbdb enrichment) and start the persistent store once.
+    const String logbookStr = configServer.GetStoredString("logbook");
+    logbookEnabled = logbookStr.isEmpty() ? false : (logbookStr == "true");
+    if (logbookEnabled) {
+        metadataNeeded = true;
+        logbook.Begin(); // idempotent: only the first call loads from NVS
+    }
+
+    // "look up!" overhead alert. The distance is entered in the same unit as the
+    // radar radius; store it in km for the centre-distance comparison.
+    showOverhead = configServer.GetStoredString("lookup") == "true";
+    alertOverhead = configServer.GetStoredString("lookup-alert") == "true";
+    double lookupDist = configServer.GetStoredString("lookup-dist").toDouble();
+    if (lookupDist <= 0.0) lookupDist = 3.0;
+    overheadKm = inMiles ? lookupDist * 1.609344 : lookupDist;
+
+    // Home Assistant / MQTT publishing (off by default).
+    mqttEnabled = configServer.GetStoredString("mqtt") == "true";
+    mqttDiscovery = configServer.GetStoredString("mqtt-disco") != "false"; // default on
+    mqttBase = configServer.GetStoredString("mqtt-base");
+    mqttBase.trim();
+    if (mqttBase.isEmpty()) mqttBase = "blipscope";
+
+    MqttPublisher::Config mc;
+    mc.enabled = mqttEnabled;
+    mc.host = configServer.GetStoredString("mqtt-host");  mc.host.trim();
+    const String mqttPort = configServer.GetStoredString("mqtt-port");
+    mc.port = mqttPort.isEmpty() ? 1883 : (uint16_t)mqttPort.toInt();
+    mc.user = configServer.GetStoredString("mqtt-user");
+    mc.pass = configServer.GetStoredString("mqtt-pass");
+    mc.statusTopic = mqttBase + "/status";
+    mqtt.Begin(mc); // spawns the publisher task once; reconfigures it thereafter
+    lastMqttState = millis() - 5000; // publish a first snapshot promptly once connected
+
     // data source: OpenSky cloud (default) or the user's own ADS-B receiver. The
     // URL is normalised once here so the fetch task gets a ready-to-GET endpoint.
     useLocalSource = configServer.GetStoredString("data-source") == "local";
@@ -248,6 +297,25 @@ void AircraftManager::Update()
     // solar day/night backlight dimming (self-throttled)
     UpdateBrightness();
 
+    // flush the logbook to flash if it's accumulated changes (debounced internally)
+    if (logbookEnabled)
+        logbook.MaybePersist();
+
+    // Home Assistant / MQTT: (re)publish the discovery configs + a fresh snapshot
+    // on each connect, then a retained summary every few seconds. Runs regardless
+    // of the detail view so the broker stays current; the publisher task does the
+    // actual (non-blocking) socket work.
+    if (mqttEnabled) {
+        if (mqtt.ConsumeJustConnected()) {
+            if (mqttDiscovery) PublishMqttDiscovery();
+            PublishMqttState();
+            lastMqttState = now;
+        } else if (mqtt.Connected() && now - lastMqttState >= 5000) {
+            lastMqttState = now;
+            PublishMqttState();
+        }
+    }
+
     // fill in the selected aircraft's details first, so the detail card from the
     // prior frame's tap stays on screen during each brief lookup
     ProcessDetailLookups();
@@ -280,8 +348,8 @@ void AircraftManager::Update()
         // enrich a tracked aircraft with adsbdb metadata (throttled internally)
         ProcessMetadataLookups();
 
-        // alert on watchlisted aircraft (throttled internally)
-        ProcessWatchlistNotifications();
+        // alert on watchlisted / military / overhead aircraft (throttled internally)
+        ProcessAlerts();
 
         // kick off the next fetch when due. Non-blocking: the loop keeps polling
         // touch and drawing while the request runs on the fetch task, so tapping a
@@ -434,10 +502,17 @@ void AircraftManager::ConsumeFetchResult()
 
         for (auto& ac : res->aircraft) {
             auto it = trackedAircraft.find(ac.icao24);
-            if (it == trackedAircraft.end())
+            if (it == trackedAircraft.end()) {
                 trackedAircraft.emplace(ac.icao24, TrackedAircraft{ ac, now });
-            else
+                // a fresh contact entered range: bump the odometer and log its
+                // origin country (the one logbook field the feed gives us directly).
+                if (logbookEnabled) {
+                    logbook.NoteContact();
+                    logbook.NoteCountry(ac.originCountry);
+                }
+            } else {
                 it->second.Update(ac, now);
+            }
         }
 
         // remove any planes that disappeared from the feed
@@ -476,6 +551,29 @@ void AircraftManager::Draw(LGFX_Sprite& backbuffer)
     }
     DrawScreenIndicator(backbuffer);
     DrawClock(backbuffer);
+}
+
+SpecialAircraft::Class AircraftManager::SpecialClassOf(const TrackedAircraft& tracked) const
+{
+    // priority order matches SpecialAircraft::Class: military first, then a
+    // distinctive callsign, then a plain rotorcraft. Each gated by its toggle.
+    if (showMilitary && SpecialAircraft::IsMilitary(tracked.state.icao24))
+        return SpecialAircraft::Class::Military;
+    if (showSpecial && SpecialAircraft::IsSpecialCallsign(tracked.state.callsign))
+        return SpecialAircraft::Class::Special;
+    if (showHelicopters && SpecialAircraft::IsHelicopter(tracked.state.category))
+        return SpecialAircraft::Class::Helicopter;
+    return SpecialAircraft::Class::None;
+}
+
+uint32_t AircraftManager::SpecialColor(SpecialAircraft::Class c)
+{
+    switch (c) {
+        case SpecialAircraft::Class::Military:   return lgfx::color888(255, 120, 0);  // orange (redder than watchlist amber)
+        case SpecialAircraft::Class::Special:    return lgfx::color888(80, 170, 255);  // blue
+        case SpecialAircraft::Class::Helicopter: return lgfx::color888(190, 110, 255); // violet
+        default:                                  return lgfx::color888(0, 200, 0);
+    }
 }
 
 void AircraftManager::DrawRadar(LGFX_Sprite& backbuffer)
@@ -527,6 +625,33 @@ void AircraftManager::DrawRadar(LGFX_Sprite& backbuffer)
             else
                 backbuffer.fillCircle(x, y, 3, markerColor);
         }
+
+        // special contact (military / special callsign / helicopter): a coloured
+        // diamond reticle + tag. All detected offline from the live feed, so they
+        // work on any data source. Drawn as an overlay (not a marker replacement)
+        // so altitude colour, emergency styling, and the highlight/watchlist/pin
+        // rings all still stack on top.
+        if (const SpecialAircraft::Class sc = SpecialClassOf(tracked); sc != SpecialAircraft::Class::None) {
+            const uint32_t col = SpecialColor(sc);
+            backbuffer.drawLine(x,     y - 9, x + 9, y,     col);
+            backbuffer.drawLine(x + 9, y,     x,     y + 9, col);
+            backbuffer.drawLine(x,     y + 9, x - 9, y,     col);
+            backbuffer.drawLine(x - 9, y,     x,     y - 9, col);
+            backbuffer.setTextSize(1);
+            backbuffer.setTextColor(col);
+            backbuffer.drawString(SpecialAircraft::Tag(sc), x + 11, y - 3);
+        }
+
+        // fresh logbook catch: a gold "NEW" flag for a never-before-seen type/airline
+        if (logbookEnabled && tracked.freshCatch) {
+            backbuffer.setTextSize(1);
+            backbuffer.setTextColor(lgfx::color888(255, 215, 0));
+            backbuffer.drawString("NEW", x + 11, y + 6);
+        }
+
+        // overhead: pulsing "look up!" ring when a contact is passing near-overhead
+        if (showOverhead && IsOverhead(tracked))
+            DrawOverheadAlert(backbuffer, x, y);
 
         // ring the standout contacts; tags stack up-left to avoid the info text
         if (displayHighlight) {
@@ -609,6 +734,8 @@ void AircraftManager::DrawList(LGFX_Sprite& backbuffer)
 
         const int y = LIST_ROW_TOP + r * LIST_ROW_H;
         uint32_t rowColor = lgfx::color888(0, 200, 0);
+        if (const SpecialAircraft::Class sc = SpecialClassOf(t); sc != SpecialAircraft::Class::None)
+            rowColor = SpecialColor(sc);              // military/special/heli
         if (MatchesWatchlist(t))         rowColor = lgfx::color888(255, 140, 0); // amber
         if (order[idx] == pinnedIcao)    rowColor = lgfx::color888(255, 255, 255); // pin wins
         backbuffer.setTextColor(rowColor);
@@ -666,6 +793,16 @@ void AircraftManager::DrawStats(LGFX_Sprite& backbuffer)
         float distance = sqrtf(minD2) * 111.0f;
         if (rangeUnit == "mi") distance /= 1.609344f;
         line("Near " + label(nearIcao) + " " + String(distance, distance < 10.0f ? 1 : 0) + rangeUnit);
+    }
+
+    // spotting logbook totals (the persistent "lifelist")
+    if (logbookEnabled) {
+        y += 6;
+        backbuffer.setTextColor(lgfx::color888(0, 255, 0));
+        line("LIFELIST");
+        backbuffer.setTextColor(lgfx::color888(0, 200, 0));
+        line(String(logbook.TypeCount()) + " types  " + String(logbook.OperatorCount()) + " airlines");
+        line(String(logbook.CountryCount()) + " countries  " + String(logbook.Contacts()) + " seen");
     }
 }
 
@@ -810,22 +947,59 @@ void AircraftManager::DrawAircraftInfo(LGFX_Sprite& backbuffer, int x, int y, co
 
 void AircraftManager::DrawAircraftTriangle(LGFX_Sprite& backbuffer, int x, int y, const TrackedAircraft& tracked, uint32_t color) const
 {
+    // Type-aware marker, keyed off the ADS-B emitter category (normalised to
+    // OpenSky's numbering for both the cloud and local feeds). Heading-less types
+    // (rotorcraft, balloons) get a fixed glyph; everything else is a heading dart
+    // whose size grows with the aircraft's weight class so a heavy reads
+    // differently from a light single at a glance.
+    const int cat = tracked.state.category;
+
+    // rotorcraft: a hub with two crossed rotor blades. Non-directional, since
+    // helicopters routinely hover and yaw independently of their ground track.
+    if (cat == 8) {
+        backbuffer.drawLine(x - 5, y - 5, x + 5, y + 5, color);
+        backbuffer.drawLine(x - 5, y + 5, x + 5, y - 5, color);
+        backbuffer.fillCircle(x, y, 2, color);
+        return;
+    }
+
+    // lighter-than-air (balloon / airship): a simple ring, also non-directional.
+    if (cat == 10) {
+        backbuffer.drawCircle(x, y, 4, color);
+        return;
+    }
+
+    // heading unit vector (forward) and its perpendicular (right "wing")
     const float dx = std::sin(radians(tracked.state.trueTrack));
     const float dy = -std::cos(radians(tracked.state.trueTrack));
     const float px = -dy;
     const float py = dx;
 
-    constexpr float TRIANGLE_LENGTH = 6.0f;
-    constexpr float TRIANGLE_WIDTH = 3.0f;
+    // a dart pointing along the heading: tip ahead of the point, base behind it
+    auto dart = [&](float tip, float base, float halfWidth) {
+        const float tipX  = x + dx * tip,                 tipY  = y + dy * tip;
+        const float leftX = x - dx * base + px * halfWidth, leftY = y - dy * base + py * halfWidth;
+        const float rightX= x - dx * base - px * halfWidth, rightY= y - dy * base - py * halfWidth;
+        backbuffer.fillTriangle(tipX, tipY, leftX, leftY, rightX, rightY, color);
+    };
 
-    const float tipX = x + dx * TRIANGLE_LENGTH;
-    const float tipY = y + dy * TRIANGLE_LENGTH;
-    const float leftX = x - dx * TRIANGLE_LENGTH * 0.5f + px * TRIANGLE_WIDTH * 0.5f;
-    const float leftY = y - dy * TRIANGLE_LENGTH * 0.5f + py * TRIANGLE_WIDTH * 0.5f;
-    const float rightX = x - dx * TRIANGLE_LENGTH * 0.5f - px * TRIANGLE_WIDTH * 0.5f;
-    const float rightY = y - dy * TRIANGLE_LENGTH * 0.5f - py * TRIANGLE_WIDTH * 0.5f;
+    // glider: a long, slender dart.
+    if (cat == 9) {
+        dart(9.0f, 2.0f, 1.0f);
+        return;
+    }
 
-    backbuffer.fillTriangle(tipX, tipY, leftX, leftY, rightX, rightY, color);
+    // heavy / large jets (Large, High-vortex large, Heavy): a bigger dart with a
+    // stub cross-wing so the airliners stand out from light traffic.
+    const bool heavy = (cat == 4 || cat == 5 || cat == 6);
+    if (heavy) {
+        dart(8.0f, 4.0f, 2.5f);
+        backbuffer.drawLine(x + px * 4.0f, y + py * 4.0f, x - px * 4.0f, y - py * 4.0f, color);
+        return;
+    }
+
+    // everything else (light, small, high-performance, unknown): the standard dart
+    dart(6.0f, 3.0f, 1.5f);
 }
 
 void AircraftManager::DrawEmergencyAlert(LGFX_Sprite& backbuffer, int x, int y, const TrackedAircraft& tracked) const
@@ -847,6 +1021,21 @@ void AircraftManager::DrawEmergencyAlert(LGFX_Sprite& backbuffer, int x, int y, 
     backbuffer.setTextSize(1);
     backbuffer.setTextColor(lgfx::color888(255, 0, 0));
     backbuffer.drawString(tracked.state.squawk + " " + descriptor, x + 6, y - 10);
+}
+
+void AircraftManager::DrawOverheadAlert(LGFX_Sprite& backbuffer, int x, int y) const
+{
+    // expanding, fading cyan "ping" plus a steady "LOOK UP" label, to pull your
+    // eye to the sky as the contact passes near-overhead
+    const float phase = (millis() % 1200) / 1200.0f;            // 0..1, ~1.2s period
+    const int ringRadius = 6 + static_cast<int>(phase * 18.0f);
+    const uint8_t b = static_cast<uint8_t>((1.0f - phase) * 255.0f);
+    backbuffer.drawCircle(x, y, ringRadius, lgfx::color888(0, b, b));
+
+    backbuffer.setTextSize(1);
+    backbuffer.setTextColor(lgfx::color888(0, 255, 255));
+    const char* label = "LOOK UP";
+    backbuffer.drawString(label, x - (int)backbuffer.textWidth(label) / 2, y - 18);
 }
 
 void AircraftManager::DrawAircraftTrail(LGFX_Sprite& backbuffer, const TrackedAircraft& tracked, int headX, int headY) const
@@ -1080,9 +1269,22 @@ bool AircraftManager::MatchesWatchlist(const TrackedAircraft& tracked) const
     return false;
 }
 
-void AircraftManager::ProcessWatchlistNotifications()
+bool AircraftManager::IsOverhead(const TrackedAircraft& tracked) const
 {
-    if (watchlist.empty() || ntfyTopic.isEmpty())
+    if (tracked.state.onGround)
+        return false;
+    auto [aLat, aLon] = tracked.GetDisplayPosition();
+    const float dLatKm = (aLat - (float)lat) * 111.0f;
+    const float dLonKm = (aLon - (float)lon) * 111.0f * cosf(radians((float)lat));
+    return sqrtf(dLatKm * dLatKm + dLonKm * dLonKm) <= (float)overheadKm;
+}
+
+void AircraftManager::ProcessAlerts()
+{
+    if (ntfyTopic.isEmpty())
+        return;
+    const bool flyoverEnabled = !watchlist.empty() || alertMilitary;
+    if (!flyoverEnabled && !alertOverhead)
         return;
 
     const unsigned long now = millis();
@@ -1091,32 +1293,195 @@ void AircraftManager::ProcessWatchlistNotifications()
     lastNotifyCheck = now;
 
     for (auto& [icao, tracked] : trackedAircraft) {
-        if (tracked.state.onGround || tracked.watchNotified) continue;
-        if (!MatchesWatchlist(tracked)) continue;
+        if (tracked.state.onGround) continue;
 
-        SendFlyoverNotification(tracked);
-        tracked.watchNotified = true;
-        return; // at most one notification per tick
+        // overhead "look up" alert -- one-shot per tracking session
+        if (alertOverhead && !tracked.overheadNotified && IsOverhead(tracked)) {
+            SendOverheadNotification(tracked);
+            tracked.overheadNotified = true;
+            return; // at most one notification per tick
+        }
+
+        // watchlist / military flyover alert
+        if (flyoverEnabled && !tracked.watchNotified) {
+            const bool military = alertMilitary && SpecialAircraft::IsMilitary(tracked.state.icao24);
+            if (military || MatchesWatchlist(tracked)) {
+                SendFlyoverNotification(tracked, military);
+                tracked.watchNotified = true;
+                return;
+            }
+        }
     }
 }
 
-void AircraftManager::SendFlyoverNotification(const TrackedAircraft& tracked)
+void AircraftManager::SendFlyoverNotification(const TrackedAircraft& tracked, bool military)
 {
     String callsign = tracked.state.callsign;
     callsign.trim();
     if (callsign.isEmpty()) { callsign = tracked.state.icao24; callsign.toUpperCase(); }
 
-    String body = callsign;
+    String body = military ? "MILITARY " + callsign : callsign;
     if (!tracked.typeCode.isEmpty())     body += " (" + tracked.typeCode + ")";
     if (!tracked.operatorName.isEmpty()) body += " " + tracked.operatorName;
     body += " at " + String(lroundf(tracked.state.baroAltitude)) + " m";
 
     const HttpResult result = http.Post(
         "https://ntfy.sh/" + ntfyTopic, body,
-        { { "Title", "Blipscope flyover" }, { "Tags", "airplane" } });
+        { { "Title", military ? "Blipscope military flyover" : "Blipscope flyover" },
+          { "Tags", military ? "rotating_light" : "airplane" } });
 
-    Serial.printf("[ntfy] %s -> %s\n", callsign.c_str(),
+    Serial.printf("[ntfy] %s%s -> %s\n", military ? "[MIL] " : "", callsign.c_str(),
                   result.success ? "sent" : result.errorMessage.c_str());
+}
+
+void AircraftManager::SendOverheadNotification(const TrackedAircraft& tracked)
+{
+    String callsign = tracked.state.callsign;
+    callsign.trim();
+    if (callsign.isEmpty()) { callsign = tracked.state.icao24; callsign.toUpperCase(); }
+
+    String body = callsign + " passing overhead";
+    if (!tracked.typeCode.isEmpty()) body += " (" + tracked.typeCode + ")";
+    body += " at " + String(lroundf(tracked.state.baroAltitude)) + " m";
+
+    const HttpResult result = http.Post(
+        "https://ntfy.sh/" + ntfyTopic, body,
+        { { "Title", "Blipscope overhead - look up!" }, { "Tags", "eyes" } });
+
+    Serial.printf("[ntfy] [OVH] %s -> %s\n", callsign.c_str(),
+                  result.success ? "sent" : result.errorMessage.c_str());
+}
+
+void AircraftManager::PublishMqttState()
+{
+    if (!mqtt.Connected())
+        return;
+
+    int count = 0;
+    String highIcao, fastIcao, nearIcao, milIcao, ovhIcao;
+    float maxAlt = -1e30f, maxVel = -1e30f, minD2 = 1e30f;
+    bool anyMil = false, anyOvh = false;
+    const bool overheadActive = showOverhead || alertOverhead;
+
+    for (auto& [icao, t] : trackedAircraft) {
+        if (t.state.onGround) continue;
+        ++count;
+        if (t.state.baroAltitude > maxAlt) { maxAlt = t.state.baroAltitude; highIcao = icao; }
+        if (t.state.velocity > maxVel)     { maxVel = t.state.velocity; fastIcao = icao; }
+        auto [la, lo] = t.GetDisplayPosition();
+        const float dLa = la - (float)lat, dLo = lo - (float)lon;
+        const float d2 = dLa * dLa + dLo * dLo;
+        if (d2 < minD2) { minD2 = d2; nearIcao = icao; }
+        if (SpecialAircraft::IsMilitary(t.state.icao24)) { anyMil = true; if (milIcao.isEmpty()) milIcao = icao; }
+        if (overheadActive && IsOverhead(t))             { anyOvh = true; if (ovhIcao.isEmpty()) ovhIcao = icao; }
+    }
+
+    auto callsignOf = [&](const String& icao) -> String {
+        auto it = trackedAircraft.find(icao);
+        if (it == trackedAircraft.end()) return "";
+        String cs = it->second.state.callsign; cs.trim();
+        if (cs.isEmpty()) { cs = icao; cs.toUpperCase(); }
+        return cs;
+    };
+
+    JsonDocument doc;
+    doc["count"] = count;
+    doc["military"] = anyMil;
+    doc["overhead"] = anyOvh;
+
+    if (count > 0) {
+        auto it = trackedAircraft.find(nearIcao);
+        if (it != trackedAircraft.end()) {
+            const TrackedAircraft& n = it->second;
+            auto [aLat, aLon] = n.GetDisplayPosition();
+            const float dLatKm = (aLat - (float)lat) * 111.0f;
+            const float dLonKm = (aLon - (float)lon) * 111.0f * cosf(radians((float)lat));
+            float bearing = degrees(atan2f(dLonKm, dLatKm));
+            if (bearing < 0.0f) bearing += 360.0f;
+
+            JsonObject nearest = doc["nearest"].to<JsonObject>();
+            nearest["callsign"] = callsignOf(nearIcao);
+            nearest["type"] = n.typeCode;
+            nearest["registration"] = n.registration;
+            nearest["operator"] = n.operatorName;
+            nearest["dist_km"] = roundf(sqrtf(minD2) * 111.0f * 10.0f) / 10.0f;
+            nearest["alt_m"] = (int)lroundf(n.state.baroAltitude);
+            nearest["speed_ms"] = (int)lroundf(n.state.velocity);
+            nearest["bearing"] = (int)lroundf(bearing);
+        }
+        doc["highest_callsign"] = callsignOf(highIcao);
+        doc["highest_alt_m"] = (int)lroundf(maxAlt);
+        doc["fastest_callsign"] = callsignOf(fastIcao);
+        doc["fastest_speed_ms"] = (int)lroundf(maxVel);
+    }
+    if (anyMil) doc["military_callsign"] = callsignOf(milIcao);
+    if (anyOvh) doc["overhead_callsign"] = callsignOf(ovhIcao);
+
+    String payload;
+    serializeJson(doc, payload);
+    mqtt.Publish(mqttBase + "/summary", payload, true);
+}
+
+void AircraftManager::PublishMqttDiscovery()
+{
+    const String id = DeviceIdentity::Name(); // e.g. "Blipscope-A1B2C3"
+    String uid = id;
+    uid.toLowerCase();
+    const String summaryTopic = mqttBase + "/summary";
+    const String statusTopic = mqttBase + "/status";
+
+    // common fields shared by every entity: state/availability topics, unique id,
+    // and the parent device so HA groups them under one "Blipscope" device.
+    auto base = [&](JsonDocument& doc, const char* name, const String& key) {
+        doc["name"] = name;
+        doc["state_topic"] = summaryTopic;
+        doc["availability_topic"] = statusTopic;
+        doc["unique_id"] = uid + "_" + key;
+        JsonObject dev = doc["device"].to<JsonObject>();
+        dev["identifiers"].to<JsonArray>().add(uid);
+        dev["name"] = id;
+        dev["manufacturer"] = "Valar Systems";
+        dev["model"] = "Blipscope";
+    };
+    auto send = [&](const char* component, const String& key, JsonDocument& doc) {
+        String payload;
+        serializeJson(doc, payload);
+        mqtt.Publish(String("homeassistant/") + component + "/" + uid + "_" + key + "/config", payload, true);
+    };
+
+    {
+        JsonDocument d; base(d, "Aircraft in range", "count");
+        d["value_template"] = "{{ value_json.count }}";
+        d["unit_of_measurement"] = "aircraft";
+        d["icon"] = "mdi:airplane";
+        send("sensor", "count", d);
+    }
+    {
+        JsonDocument d; base(d, "Nearest aircraft", "nearest");
+        d["value_template"] = "{{ value_json.nearest.callsign if value_json.nearest is defined else 'none' }}";
+        d["json_attributes_topic"] = summaryTopic;
+        d["json_attributes_template"] = "{{ value_json.nearest | tojson }}";
+        d["icon"] = "mdi:airplane-search";
+        send("sensor", "nearest", d);
+    }
+    {
+        JsonDocument d; base(d, "Aircraft overhead", "overhead");
+        d["value_template"] = "{{ 'ON' if value_json.overhead else 'OFF' }}";
+        d["payload_on"] = "ON";
+        d["payload_off"] = "OFF";
+        d["device_class"] = "occupancy";
+        send("binary_sensor", "overhead", d);
+    }
+    {
+        JsonDocument d; base(d, "Military aircraft in range", "military");
+        d["value_template"] = "{{ 'ON' if value_json.military else 'OFF' }}";
+        d["payload_on"] = "ON";
+        d["payload_off"] = "OFF";
+        d["icon"] = "mdi:shield-airplane";
+        send("binary_sensor", "military", d);
+    }
+
+    Serial.printf("[mqtt] published HA discovery for %s\n", uid.c_str());
 }
 
 void AircraftManager::LookupRoute(const String& callsign, TrackedAircraft& tracked)
@@ -1209,6 +1574,27 @@ void AircraftManager::DrawDetailCard(LGFX_Sprite& backbuffer, const TrackedAircr
         y += lineHeight;
     };
 
+    // flag a special contact up top, in the same colour as its radar marker
+    if (const SpecialAircraft::Class sc = SpecialClassOf(tracked); sc != SpecialAircraft::Class::None) {
+        const char* label = "";
+        switch (sc) {
+            case SpecialAircraft::Class::Military:   label = "- MILITARY -";   break;
+            case SpecialAircraft::Class::Special:    label = "- SPECIAL -";    break;
+            case SpecialAircraft::Class::Helicopter: label = "- HELICOPTER -"; break;
+            default: break;
+        }
+        backbuffer.setTextColor(SpecialColor(sc));
+        line(label);
+        backbuffer.setTextColor(lgfx::color888(0, 200, 0));
+    }
+
+    // first-ever sighting of this type/airline
+    if (logbookEnabled && tracked.freshCatch) {
+        backbuffer.setTextColor(lgfx::color888(255, 215, 0));
+        line("* NEW CATCH *");
+        backbuffer.setTextColor(lgfx::color888(0, 200, 0));
+    }
+
     // identity first (route + type + operator), shown in both layouts
     if (!tracked.routeOrigin.isEmpty() && !tracked.routeDest.isEmpty())
         line(tracked.routeOrigin + " -> " + tracked.routeDest);
@@ -1299,6 +1685,15 @@ void AircraftManager::LookupAircraftMetadata(const String& icao24, TrackedAircra
     tracked.operatorName = aircraft["registered_owner"].isNull()    ? "" : aircraft["registered_owner"].as<String>();
     tracked.registration = aircraft["registration"].isNull()        ? "" : aircraft["registration"].as<String>();
     tracked.photoUrl     = aircraft["url_photo_thumbnail"].isNull() ? "" : aircraft["url_photo_thumbnail"].as<String>();
+
+    // add the type / airline to the lifelist; a brand-new entry marks this a
+    // "fresh catch" for the radar + detail card.
+    if (logbookEnabled) {
+        const bool newType = logbook.NoteType(tracked.typeCode);
+        const bool newOperator = logbook.NoteOperator(tracked.operatorName);
+        if (newType || newOperator)
+            tracked.freshCatch = true;
+    }
 
     Serial.printf("[adsbdb] %s -> type=%s operator=%s reg=%s\n",
                   icao24.c_str(), tracked.typeCode.c_str(),

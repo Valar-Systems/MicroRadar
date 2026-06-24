@@ -12,12 +12,16 @@ Blipscope is a small open-source flight radar for your desk. It sits on a 1.28" 
 
 ## What it does
 
-- **Live radar view** — aircraft plotted around your location, with fading trails, heading triangles, and altitude-based colour coding.
+- **Live radar view** — aircraft plotted around your location, with fading trails, type-aware heading markers (helicopters, gliders, and heavies each draw differently), and altitude-based colour coding.
 - **Tap to inspect** — touch an aircraft to open a detail card with callsign, type, operator, registration, route, altitude, speed, and a photo. Pin one to keep tracking it.
 - **List & stats screens** — swipe between the radar, a list of everything in range, and at-a-glance statistics.
+- **Spotting logbook** — an optional persistent "lifelist" that tallies every unique aircraft type, airline, and country you've ever seen overhead, shown on the Stats screen, with a gold "NEW" flag on first sightings.
 - **Tail-number watchlist** — get a phone notification (via [ntfy](https://ntfy.sh)) whenever a specific aircraft flies over.
 - **Emergency squawk alerts** — highlights aircraft broadcasting 7500/7600/7700.
+- **"Look up!" overhead alert** — flashes a cyan ring when an aircraft passes within a set distance of your location, so you can glance up and spot it for real, with an optional phone alert.
+- **Special-aircraft detection** — flags military (orange "MIL", from the ICAO address), helicopters (violet "HELI", from the ADS-B category), and distinctive callsigns such as rescue/police/test flights (blue "SPC") — all worked out offline with no account or lookup needed, plus an optional phone alert when a military aircraft flies over.
 - **NTP clock & auto-dim** — keeps accurate time and dims itself at night based on your local sunrise/sunset.
+- **Home Assistant / MQTT** — optionally publishes a live summary (aircraft count, nearest flight, and overhead/military flags) to your MQTT broker, with auto-discovery so Home Assistant creates the sensors for you.
 - **Over-the-air updates** — pulls new firmware automatically from GitHub Releases, so it stays current without plugging in.
 - **Configurable range & display** — set your centre point and scan radius in km or miles, and toggle the on-screen elements you want.
 
@@ -67,8 +71,9 @@ There you can set:
 - **Radar radius** — how far the scan extends, in km or miles (capped at ~222 km / 138 mi to stay within data rate limits).
 - **Data source** — pull flight data from the OpenSky Network (the cloud default) or from your own ADS-B receiver on the local network (see below).
 - **Display options** — toggle the on-screen elements and aircraft info fields.
-- **Watchlist & alerts** — tail numbers to watch and the ntfy topic to notify.
+- **Watchlist & alerts** — tail numbers to watch and the ntfy topic to notify, plus toggles to highlight military aircraft, helicopters, and special flights, and to alert when a military aircraft flies over.
 - **OpenSky credentials** — your client ID and secret (optional, but recommended).
+- **Home Assistant / MQTT** — broker address and port, optional username/password, base topic, and an auto-discovery toggle. When enabled, Blipscope publishes a retained `<base>/summary` (and, with discovery on, the Home Assistant config so an "Aircraft in range" count, a "Nearest aircraft" sensor, and "Aircraft overhead" / "Military aircraft in range" binary sensors appear automatically).
 
 The config page is available any time the device is on WiFi, so you can tweak settings whenever you like.
 
