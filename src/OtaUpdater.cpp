@@ -9,8 +9,8 @@ namespace {
 
 // "releases/latest/download/<asset>" always resolves to the newest published
 // (non-draft, non-prerelease) release's asset, redirecting to the CDN.
-const char* VERSION_URL  = "https://github.com/Valar-Systems/MicroRadar/releases/latest/download/version.txt";
-const char* FIRMWARE_URL = "https://github.com/Valar-Systems/MicroRadar/releases/latest/download/firmware.bin";
+const char* VERSION_URL  = "https://github.com/Valar-Systems/Blipscope/releases/latest/download/version.txt";
+const char* FIRMWARE_URL = "https://github.com/Valar-Systems/Blipscope/releases/latest/download/firmware.bin";
 
 void drawStatus(LGFX& tft, const String& msg)
 {
