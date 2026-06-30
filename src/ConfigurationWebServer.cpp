@@ -2,7 +2,7 @@
 #include <ESPmDNS.h>
 #include "DeviceIdentity.h"
 #include "OtaUpdater.h"
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC)
 #include "AircraftInfoFields.h"   // radar-only; filtered out of the FEATURE_EAM/FEATURE_SPACE builds
 #endif
 
@@ -29,7 +29,7 @@
 // The page is feature-specific: the radar build serves the radar settings form below; the
 // FEATURE_EAM build serves the EAM monitor form; the FEATURE_SPACE build serves the Spacescope
 // form. The ConfigurationWebServer shell (NVS namespace, mDNS, /reset-wifi, save flag) is shared.
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC)
 static const char CONFIG_HTML[] PROGMEM = R"(
 <html>
     <head>
@@ -733,6 +733,124 @@ static const char CONFIG_HTML[] PROGMEM = R"(
     </body>
 </html>
 )";
+#elif defined(FEATURE_SEISMIC)
+// FEATURE_SEISMIC (Seismic edition) config page: location, radar magnitude/radius, ntfy alerts,
+// display, and an optional backend. Shares the page chrome / JS pattern with the other editions.
+static const char CONFIG_HTML[] PROGMEM = R"(
+<html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Configure Blipscope Seismic</title>
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='rgb(24,14,4)'/><path d='M1 8 L4 8 L5 3 L7 13 L9 6 L10.5 8 L15 8' fill='none' stroke='rgb(255,170,0)' stroke-width='1.2'/></svg>">
+        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.0"></script>
+    </head>
+    <body class="font-mono bg-gray-900 text-amber-300 min-h-screen p-4 sm:p-0 text-md sm:text-sm">
+        <fieldset class="border border-amber-400 p-5 w-full max-w-2xl mx-auto sm:m-10">
+            <legend class="px-2">Configure Blipscope &mdash; Seismic</legend>
+
+            <form id="cfg" action="/save" method="POST" class="flex flex-col gap-4 sm:gap-2">
+
+                <div class="flex flex-col sm:flex-row gap-4 sm:gap-5">
+                    <label class="flex flex-col sm:flex-row gap-2 flex-1">
+                        <span>Latitude:</span>
+                        <input name="latitude" type="number" min="-90" step="0.000001" max="90" value='%LATITUDE%'
+                            class="border border-amber-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                    <label class="flex flex-col sm:flex-row gap-2 flex-1">
+                        <span>Longitude:</span>
+                        <input name="longitude" type="number" min="-180" step="0.000001" max="180" value='%LONGITUDE%'
+                            class="border border-amber-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                </div>
+                <span class="text-xs text-amber-600">Your location centres the quake radar, the "near me" feed and alerts, and the solar night auto-dim. Without it you still get the worldwide list and stats.</span>
+
+                <fieldset class="border border-amber-400 p-3">
+                    <legend class="px-2">Radar</legend>
+                    <div class="flex flex-col sm:flex-row gap-4 sm:gap-5">
+                        <label class="flex flex-col sm:flex-row gap-2 flex-1">
+                            <span>Min magnitude (worldwide):</span>
+                            <input name="se-min-mag" type="number" min="0" max="9" step="0.1" value='%SE_MIN_MAG%'
+                                class="border border-amber-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                        </label>
+                        <label class="flex flex-col sm:flex-row gap-2 flex-1">
+                            <span>Radar radius (km):</span>
+                            <input name="se-radius-km" type="number" min="50" max="20000" step="10" value='%SE_RADIUS%'
+                                class="border border-amber-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                        </label>
+                    </div>
+                </fieldset>
+
+                <fieldset class="border border-amber-400 p-3">
+                    <legend class="px-2">Alerts (ntfy)</legend>
+                    <label class="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <span>ntfy.sh topic:</span>
+                        <input name="ntfy-topic" value='%NTFY_TOPIC%'
+                            class="flex-1 border border-amber-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                    <div class="grid grid-cols-1 gap-2 mt-3">
+                        <label class="flex items-center gap-2"><input name="se-alert-big" type="checkbox" %AL_BIG% class="accent-amber-400"><span>Big quake worldwide, M &ge;</span>
+                            <input name="se-big-mag" type="number" min="0" max="9" step="0.1" value='%SE_BIG_MAG%' class="border border-amber-400 bg-gray-900 w-16 px-2 sm:py-0"></label>
+                        <label class="flex items-center gap-2"><input name="se-alert-near" type="checkbox" %AL_NEAR% class="accent-amber-400"><span>Quake near me, M &ge;</span>
+                            <input name="se-near-mag" type="number" min="0" max="9" step="0.1" value='%SE_NEAR_MAG%' class="border border-amber-400 bg-gray-900 w-16 px-2 sm:py-0"></label>
+                        <label class="flex items-center gap-2"><input name="se-alert-tsunami" type="checkbox" %AL_TSUNAMI% class="accent-amber-400"><span>Tsunami-flagged quake</span></label>
+                    </div>
+                    <span class="text-xs text-amber-600 mt-1">Leave the topic blank to disable all push alerts. The "near me" alert needs a location above.</span>
+                </fieldset>
+
+                <fieldset class="border border-amber-400 p-3">
+                    <legend class="px-2">Display</legend>
+                    <div class="flex flex-col sm:flex-row gap-4 sm:gap-8">
+                        <label class="flex items-center gap-2"><input name="autodim" type="checkbox" %AUTODIM% class="accent-amber-400"><span>Auto-dim at night</span></label>
+                    </div>
+                    <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2 mt-3">
+                        <span>Brightness:</span>
+                        <input name="brightness" type="range" min="10" max="255" value='%BRIGHTNESS%' class="flex-1 w-full accent-amber-400">
+                    </label>
+                </fieldset>
+
+                <fieldset class="border border-amber-400 p-3">
+                    <legend class="px-2">Advanced</legend>
+                    <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                        <span>Backend base URL:</span>
+                        <input name="se-base-url" value='%SE_BASE_URL%' placeholder="blank = USGS directly"
+                            class="flex-1 border border-amber-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                    <span class="text-xs text-amber-600">Optional. Leave blank and the device pulls straight from the public USGS earthquake API.</span>
+                </fieldset>
+
+                <div class="flex flex-col sm:flex-row gap-4 sm:gap-5">
+                    <input type="submit" value="Save"
+                        class="bg-amber-400 text-black mt-4 px-4 py-3 text-lg sm:text-base sm:px-2 sm:py-0 self-start cursor-pointer">
+                    <button type="button" id="resetwifi"
+                        class="border border-red-500 text-red-500 mt-4 px-4 py-3 text-lg sm:text-base sm:px-2 sm:py-0 self-start cursor-pointer">
+                        Reset WiFi</button>
+                    <div id="result" class="mt-4 px-1 sm:px-10"></div>
+                </div>
+            </form>
+
+            <div class="flex justify-between items-end text-xs text-amber-600 mt-4">
+                <a href="https://github.com/Valar-Systems/Blipscope/wiki" target="_blank" rel="noopener" class="text-amber-300 underline">Help &amp; documentation</a>
+                <span>Firmware v%FW_VERSION% (Seismic)</span>
+            </div>
+        </fieldset>
+
+        <script>
+            document.getElementById('cfg').addEventListener('submit', function(e) {
+                e.preventDefault();
+                fetch(this.action, { method: 'POST', body: new FormData(this) })
+                    .then(r => r.text())
+                    .then(html => document.getElementById('result').innerHTML = html);
+            });
+            document.getElementById('resetwifi').addEventListener('click', function() {
+                if (!confirm('Forget WiFi credentials and restart into setup mode? You will need to reconnect the device to a network.')) return;
+                fetch('/reset-wifi', { method: 'POST' })
+                    .then(r => r.text())
+                    .then(html => document.getElementById('result').innerHTML = html);
+            });
+        </script>
+    </body>
+</html>
+)";
 #endif
 
 void ConfigurationWebServer::Initialise() {
@@ -760,7 +878,7 @@ void ConfigurationWebServer::Initialise() {
 
         // read all values up front so the processor lambda can capture by value
         prefs.begin("config", true);
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC)
         const String latitude = prefs.getString("latitude", "");
         const String longitude = prefs.getString("longitude", "");
         const String radius = prefs.getString("radius", "100");
@@ -865,10 +983,26 @@ void ConfigurationWebServer::Initialise() {
         const String spaceScreens = prefs.isKey("space-screens")
             ? prefs.getString("space-screens", "")
             : String("iss,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,humans,moon,clock");
+#elif defined(FEATURE_SEISMIC)
+        // FEATURE_SEISMIC: load the Seismic edition config fields. isKey() guards keep not-yet-saved
+        // reads from logging NVS NOT_FOUND; the device talks to USGS directly (se-base-url empty).
+        const String seBaseUrl = prefs.getString("se-base-url", "");
+        const String latitude = prefs.getString("latitude", "");
+        const String longitude = prefs.getString("longitude", "");
+        const String seMinMag = prefs.isKey("se-min-mag") ? prefs.getString("se-min-mag", "2.5") : "2.5";
+        const String seRadius = prefs.isKey("se-radius-km") ? prefs.getString("se-radius-km", "500") : "500";
+        const String seBigMag = prefs.isKey("se-big-mag") ? prefs.getString("se-big-mag", "6.0") : "6.0";
+        const String seNearMag = prefs.isKey("se-near-mag") ? prefs.getString("se-near-mag", "4.0") : "4.0";
+        const String ntfyTopic = prefs.getString("ntfy-topic", "");
+        const String alertBig = prefs.isKey("se-alert-big") ? prefs.getString("se-alert-big", "true") : "true";
+        const String alertNear = prefs.isKey("se-alert-near") ? prefs.getString("se-alert-near", "true") : "true";
+        const String alertTsunami = prefs.isKey("se-alert-tsunami") ? prefs.getString("se-alert-tsunami", "true") : "true";
+        const String autoDimEnabled = prefs.isKey("autodim") ? prefs.getString("autodim", "true") : "true";
+        const String brightness = prefs.getString("brightness", "255");
 #endif
         prefs.end();
 
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC)
         // mask secrets before sending to client
         std::fill(openskySecret.begin(), openskySecret.end(), '*');
         std::fill(mqttPass.begin(), mqttPass.end(), '*');
@@ -879,7 +1013,7 @@ void ConfigurationWebServer::Initialise() {
         // FEATURE_SPACE has no secret fields yet (no API keys until the key-gated screens land).
 
         // template processor called once per %PLACEHOLDER% token found in CONFIG_HTML.
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC)
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
@@ -981,6 +1115,29 @@ void ConfigurationWebServer::Initialise() {
                 return "";
             }
         );
+#elif defined(FEATURE_SEISMIC)
+        AsyncWebServerResponse* response = request->beginResponse(
+            200, "text/html",
+            (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
+            [seBaseUrl, latitude, longitude, seMinMag, seRadius, seBigMag, seNearMag, ntfyTopic, alertBig, alertNear, alertTsunami, autoDimEnabled, brightness]
+            (const String& var) -> String {
+                if (var == "SE_BASE_URL")    return seBaseUrl;
+                if (var == "LATITUDE")       return latitude;
+                if (var == "LONGITUDE")      return longitude;
+                if (var == "SE_MIN_MAG")     return seMinMag;
+                if (var == "SE_RADIUS")      return seRadius;
+                if (var == "SE_BIG_MAG")     return seBigMag;
+                if (var == "SE_NEAR_MAG")    return seNearMag;
+                if (var == "NTFY_TOPIC")     return ntfyTopic;
+                if (var == "AL_BIG")         return alertBig == "true" ? "checked" : "";
+                if (var == "AL_NEAR")        return alertNear == "true" ? "checked" : "";
+                if (var == "AL_TSUNAMI")     return alertTsunami == "true" ? "checked" : "";
+                if (var == "AUTODIM")        return autoDimEnabled == "true" ? "checked" : "";
+                if (var == "BRIGHTNESS")     return brightness;
+                if (var == "FW_VERSION")     return String(FW_VERSION);
+                return "";
+            }
+        );
 #endif
         // never cache the config page: a stale copy (e.g. predating a new option)
         // would hide controls and, once submitted, silently clear the missing fields
@@ -1005,7 +1162,7 @@ void ConfigurationWebServer::Initialise() {
 
         prefs.begin("config", false);
 
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC)
         TrySaveParam("latitude");
         TrySaveParam("longitude");
         TrySaveParam("radius");
@@ -1107,6 +1264,23 @@ void ConfigurationWebServer::Initialise() {
         prefs.putString("sp-alert-flare", request->hasParam("sp-alert-flare", true) ? "true" : "false");
         prefs.putString("sp-alert-iss", request->hasParam("sp-alert-iss", true) ? "true" : "false");
         prefs.putString("sp-alert-dsn", request->hasParam("sp-alert-dsn", true) ? "true" : "false");
+        prefs.putString("autodim", request->hasParam("autodim", true) ? "true" : "false");
+#elif defined(FEATURE_SEISMIC)
+        // FEATURE_SEISMIC: persist the Seismic edition config fields.
+        TrySaveParam("se-base-url");
+        TrySaveParam("latitude");
+        TrySaveParam("longitude");
+        TrySaveParam("se-min-mag");
+        TrySaveParam("se-radius-km");
+        TrySaveParam("se-big-mag");
+        TrySaveParam("se-near-mag");
+        TrySaveParam("ntfy-topic");
+        TrySaveParam("brightness");
+
+        // checkboxes: absent in the body when unchecked, so hasParam() is the on/off signal
+        prefs.putString("se-alert-big", request->hasParam("se-alert-big", true) ? "true" : "false");
+        prefs.putString("se-alert-near", request->hasParam("se-alert-near", true) ? "true" : "false");
+        prefs.putString("se-alert-tsunami", request->hasParam("se-alert-tsunami", true) ? "true" : "false");
         prefs.putString("autodim", request->hasParam("autodim", true) ? "true" : "false");
 #endif
         prefs.end();
