@@ -6,23 +6,30 @@ namespace {
 
 String trimmed(const String& s) { String c = s; c.trim(); return c; }
 
+// Display units. The feeds are normalised to OpenSky's SI internally (metres,
+// m/s); aviation/US convention shows altitude in feet, ground speed in knots,
+// and vertical rate in feet per minute, so convert here at the display layer.
+constexpr float METRES_TO_FEET = 3.28084f;
+constexpr float MS_TO_KNOTS    = 1.94384f;
+constexpr float MS_TO_FTMIN    = 196.850f; // 60 / 0.3048
+
 // --- fields straight from the OpenSky /states/all feed ---
 String fmtCallsign(const TrackedAircraft& t) { return trimmed(t.state.callsign); }
 String fmtIcao(const TrackedAircraft& t)     { return t.state.icao24; }
 String fmtCountry(const TrackedAircraft& t)  { return t.state.originCountry; }
 String fmtSquawk(const TrackedAircraft& t)   { return t.state.squawk; }
 
-String fmtSpeed(const TrackedAircraft& t)    { return String(lroundf(t.state.velocity)) + " m/s"; }
-String fmtBaroAlt(const TrackedAircraft& t)  { return String(lroundf(t.state.baroAltitude)) + " m"; }
-String fmtGeoAlt(const TrackedAircraft& t)   { return String(lroundf(t.state.geoAltitude)) + " m"; }
+String fmtSpeed(const TrackedAircraft& t)    { return String(lroundf(t.state.velocity * MS_TO_KNOTS)) + " kt"; }
+String fmtBaroAlt(const TrackedAircraft& t)  { return String(lroundf(t.state.baroAltitude * METRES_TO_FEET)) + " ft"; }
+String fmtGeoAlt(const TrackedAircraft& t)   { return String(lroundf(t.state.geoAltitude * METRES_TO_FEET)) + " ft"; }
 String fmtHeading(const TrackedAircraft& t)  { return String(lroundf(t.state.trueTrack)) + " deg"; }
 
 String fmtVerticalRate(const TrackedAircraft& t) {
-    const long r = lroundf(t.state.verticalRate);
+    const long r = lroundf(t.state.verticalRate * MS_TO_FTMIN);
     String s;
     if (r > 0) s = "+";          // mark climbs; descents already carry the minus sign
     s += String(r);
-    s += " m/s";
+    s += " ft/min";
     return s;
 }
 

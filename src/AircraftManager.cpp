@@ -16,6 +16,12 @@
 constexpr int PHOTO_W = 150;
 constexpr int PHOTO_H = 100;
 
+// Display-unit conversions. The feeds are normalised to OpenSky's SI internally
+// (metres, m/s); aviation/US convention shows altitude in feet and ground speed
+// in knots, so convert at each on-screen/notification site that shows telemetry.
+constexpr float METRES_TO_FEET = 3.28084f;
+constexpr float MS_TO_KNOTS    = 1.94384f;
+
 // Critical-heap floor below which we don't even start an enrichment HTTPS lookup -- a
 // last-ditch guard, not a routine throttle. The post-banding/streaming build runs with
 // only ~24-28 KB largest free block yet the OpenSky fetch (same mbedTLS path) handshakes
@@ -1039,7 +1045,7 @@ void AircraftManager::DrawList(BandCanvas& backbuffer)
         cs.trim();
         if (cs.isEmpty()) { cs = order[idx]; cs.toUpperCase(); }
         const String type = t.typeCode.isEmpty() ? "--" : t.typeCode;
-        const String alt = String(lroundf(t.state.baroAltitude)) + "m";
+        const String alt = String(lroundf(t.state.baroAltitude * METRES_TO_FEET)) + "ft";
 
         const int y = LIST_ROW_TOP + r * LIST_ROW_H;
         uint32_t rowColor = lgfx::color888(0, 200, 0);
@@ -1097,8 +1103,8 @@ void AircraftManager::DrawStats(BandCanvas& backbuffer)
 
     line(String(count) + " aircraft");
     if (count > 0) {
-        line("High " + label(highIcao) + " " + String(lroundf(maxAlt)) + "m");
-        line("Fast " + label(fastIcao) + " " + String(lroundf(maxVel)) + "m/s");
+        line("High " + label(highIcao) + " " + String(lroundf(maxAlt * METRES_TO_FEET)) + "ft");
+        line("Fast " + label(fastIcao) + " " + String(lroundf(maxVel * MS_TO_KNOTS)) + "kt");
         float distance = sqrtf(minD2) * 111.0f;
         if (rangeUnit == "mi") distance /= 1.609344f;
         line("Near " + label(nearIcao) + " " + String(distance, distance < 10.0f ? 1 : 0) + rangeUnit);
@@ -1881,7 +1887,7 @@ void AircraftManager::SendFlyoverNotification(const TrackedAircraft& tracked, bo
     String body = military ? "MILITARY " + callsign : callsign;
     if (!tracked.typeCode.isEmpty())     body += " (" + tracked.typeCode + ")";
     if (!tracked.operatorName.isEmpty()) body += " " + tracked.operatorName;
-    body += " at " + String(lroundf(tracked.state.baroAltitude)) + " m";
+    body += " at " + String(lroundf(tracked.state.baroAltitude * METRES_TO_FEET)) + " ft";
 
     const HttpResult result = http.Post(
         "https://ntfy.sh/" + ntfyTopic, body,
@@ -1900,7 +1906,7 @@ void AircraftManager::SendOverheadNotification(const TrackedAircraft& tracked)
 
     String body = callsign + " passing overhead";
     if (!tracked.typeCode.isEmpty()) body += " (" + tracked.typeCode + ")";
-    body += " at " + String(lroundf(tracked.state.baroAltitude)) + " m";
+    body += " at " + String(lroundf(tracked.state.baroAltitude * METRES_TO_FEET)) + " ft";
 
     const HttpResult result = http.Post(
         "https://ntfy.sh/" + ntfyTopic, body,
@@ -2183,8 +2189,8 @@ void AircraftManager::DrawDetailCard(BandCanvas& backbuffer, const TrackedAircra
         line("Dist: " + String(distance, distance < 10.0f ? 1 : 0) + " " + rangeUnit + " " + dir);
 
         if (!tracked.registration.isEmpty()) line("Reg: " + tracked.registration);
-        line("Alt: " + String(lroundf(s.baroAltitude)) + " m");
-        line("Spd: " + String(lroundf(s.velocity)) + " m/s");
+        line("Alt: " + String(lroundf(s.baroAltitude * METRES_TO_FEET)) + " ft");
+        line("Spd: " + String(lroundf(s.velocity * MS_TO_KNOTS)) + " kt");
         line("Hdg: " + String(lroundf(s.trueTrack)) + " deg");
         if (!s.squawk.isEmpty()) line("Sqk: " + s.squawk);
     }
