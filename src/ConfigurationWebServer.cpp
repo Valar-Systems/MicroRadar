@@ -687,7 +687,7 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                         <input name="space-screens" value='%SPACE_SCREENS%'
                             class="border border-sky-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
                     </label>
-                    <span class="text-xs text-sky-600 mt-1">ids: iss, launch, kp, solarwind, scales, flare, aurora, dsn, deepspace, humans, moon, eclipse, meteor, cosmic, splash, clock. Empty rotates all. Each screen appears only when its feed has data; clock/moon/eclipse/meteor/cosmic always show. aurora needs a location.</span>
+                    <span class="text-xs text-sky-600 mt-1">ids: iss, launch, kp, solarwind, scales, flare, aurora, dsn, deepspace, humans, moon, starmap, eclipse, meteor, cosmic, splash, clock. Empty rotates all. Each screen appears only when its feed has data; clock/moon/eclipse/meteor/cosmic always show. aurora needs a location.</span>
                 </fieldset>
 
                 <fieldset class="border border-sky-400 p-3">
@@ -864,7 +864,7 @@ void ConfigurationWebServer::Initialise() {
         const String brightness = prefs.getString("brightness", "255");
         const String spaceScreens = prefs.isKey("space-screens")
             ? prefs.getString("space-screens", "")
-            : String("iss,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,humans,moon,eclipse,meteor,cosmic,clock");
+            : String("iss,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,humans,moon,starmap,eclipse,meteor,cosmic,clock");
 #endif
         prefs.end();
 

@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include "Layout.h"
+#include "SpaceStars.h"
 
 // The Spacescope screens. Each draws one full frame into the band canvas in absolute screen
 // coordinates (the S3 renders a single full-height band). Colours come from the palette scaled by
@@ -712,4 +713,59 @@ void SpaceManager::DrawCosmicClock(BandCanvas& c)
         c.setTextSize(3); CenterText(c, String(JulianDate(now), 4), SCREEN_SIZE_DIV_2 - 14, fg);
         c.setTextSize(1); CenterText(c, "days since 4713 BC", SCREEN_SIZE_DIV_2 + 22, dim);
     }
+}
+
+// ------------------------------------------------------------------------------- star map
+void SpaceManager::DrawStarMap(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t dim   = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint = space::ScaleColor(palette.faint, gf);
+
+    const int cx = SCREEN_SIZE_DIV_2, cy = SCREEN_SIZE_DIV_2, R = SCREEN_SIZE_DIV_2 - 8;
+    c.drawCircle(cx, cy, R, faint);
+    c.setTextSize(1); c.setTextColor(dim);
+    c.drawString("N", cx - 3, cy - R + 3);
+    c.drawString("S", cx - 3, cy + R - 11);
+    c.drawString("E", cx + R - 10, cy - 4);
+    c.drawString("W", cx - R + 3, cy - 4);
+
+    const time_t now = time(nullptr);
+    if (!hasLatLon || now <= 1600000000) {
+        c.setTextSize(2); CenterText(c, hasLatLon ? "awaiting clock" : "set location", cy - 8, dim);
+        return;
+    }
+
+    // Local apparent sidereal time (deg) + observer latitude drive each star's alt/az.
+    const double lst = LMSTHours(now, deviceLon) * 15.0;
+    const double latR = deviceLat * M_PI / 180.0;
+    const double halfPi = M_PI / 2.0;
+    int up = 0; const char* topName = nullptr; float topMag = 99;
+
+    for (int i = 0; i < space::STAR_N; ++i) {
+        const space::Star& st = space::STARS[i];
+        const double H = (lst - st.raDeg) * M_PI / 180.0;
+        const double decR = st.dec * M_PI / 180.0;
+        const double sinAlt = sin(decR) * sin(latR) + cos(decR) * cos(latR) * cos(H);
+        if (sinAlt <= 0.02) continue; // below (or right at) the horizon
+        ++up;
+        const double alt = asin(sinAlt);
+        double cosAz = (sin(decR) - sinAlt * sin(latR)) / (cos(alt) * cos(latR));
+        if (cosAz > 1) cosAz = 1;
+        if (cosAz < -1) cosAz = -1;
+        double az = acos(cosAz);
+        if (sin(H) > 0) az = 2.0 * M_PI - az; // measured from North, clockwise through East
+        const double rr = (1.0 - alt / halfPi) * R; // zenith at centre, horizon at rim
+        const int x = cx + (int)(rr * sin(az));
+        const int y = cy - (int)(rr * cos(az));
+
+        float b = (3.2f - st.mag) / 3.2f; if (b < 0.18f) b = 0.18f; if (b > 1) b = 1;
+        c.fillCircle(x, y, st.mag <= 1.0f ? 2 : 1, space::ScaleColor(palette.accent, b * gf));
+        if (st.mag < topMag && st.name && st.name[0]) { topMag = st.mag; topName = st.name; }
+    }
+
+    c.setTextSize(1); CenterText(c, "NIGHT SKY", 16, dim);
+    char info[40]; snprintf(info, sizeof(info), "%d stars up", up);
+    c.setTextSize(1); CenterText(c, info, SCREEN_SIZE - 38, faint);
+    if (topName) { c.setTextSize(1); CenterText(c, String("brightest: ") + topName, SCREEN_SIZE - 22, dim); }
 }

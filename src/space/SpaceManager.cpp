@@ -80,6 +80,7 @@ void SpaceManager::Initialise()
         if (id == "deepspace") { out = Screen::DeepSpace; return true; }
         if (id == "humans")    { out = Screen::Humans;    return true; }
         if (id == "moon")      { out = Screen::Moon;      return true; }
+        if (id == "starmap")   { out = Screen::StarMap;   return true; }
         if (id == "eclipse")   { out = Screen::Eclipse;   return true; }
         if (id == "meteor")    { out = Screen::Meteor;    return true; }
         if (id == "cosmic")    { out = Screen::CosmicClock; return true; }
@@ -168,6 +169,7 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
         case Screen::DeepSpace: DrawDeepSpace(backbuffer); break;
         case Screen::Humans:    DrawHumans(backbuffer); break;
         case Screen::Moon:      DrawMoon(backbuffer); break;
+        case Screen::StarMap:   DrawStarMap(backbuffer); break;
         case Screen::Eclipse:   DrawEclipse(backbuffer); break;
         case Screen::Meteor:    DrawMeteor(backbuffer); break;
         case Screen::CosmicClock: DrawCosmicClock(backbuffer); break;
@@ -197,6 +199,7 @@ bool SpaceManager::HasData(Screen s) const
         }
         case Screen::Humans: return feed.Crew().valid && feed.Crew().number > 0;
         case Screen::Moon:   return true; // computed on-device, always available
+        case Screen::StarMap: return hasLatLon; // on-device sky map; needs observer location
         case Screen::Eclipse:     return true; // baked table, on-device
         case Screen::Meteor:      return true; // baked table, on-device
         case Screen::CosmicClock: return true; // on-device clock faces
