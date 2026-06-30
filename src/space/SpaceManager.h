@@ -49,7 +49,7 @@ private:
     // feed has data. Later stages add more (DSN, Voyager, flares, ISS passes, ...).
     enum class Screen : uint8_t {
         Iss, IssPass, Launch, Kp, SolarWind, Scales, Flare, Aurora, Dsn, DeepSpace, Asteroid,
-        Humans, Moon, StarMap, Eclipse, Meteor, CosmicClock, Splash, Clock, COUNT
+        Humans, Moon, StarMap, Observing, Eclipse, Meteor, CosmicClock, Splash, Clock, COUNT
     };
 
     ConfigurationWebServer& configServer;
@@ -138,6 +138,7 @@ private:
     void DrawHumans(BandCanvas& c);
     void DrawMoon(BandCanvas& c);
     void DrawStarMap(BandCanvas& c);
+    void DrawObserving(BandCanvas& c);
     void DrawEclipse(BandCanvas& c);
     void DrawMeteor(BandCanvas& c);
     void DrawCosmicClock(BandCanvas& c);
@@ -150,6 +151,21 @@ private:
 
     // ISS pass prediction (loop task)
     void RecomputePass();                    // SGP4: find the next visible ISS overpass for the site
+
+    // ---- "Tonight's observing window" cache (on-device ephemeris; recomputed ~1/min) ----
+    // Sampling the next 24h of Sun/Moon altitude is cheap but not free, so DrawObserving reads this
+    // cache and RecomputeObserving() refreshes it on the loop task (the geometry changes slowly).
+    static constexpr int OBS_SEG = 72;        // ring resolution: 72 x 20-min steps = 24h
+    uint8_t obsSunBand[OBS_SEG] = {};         // per-segment darkness band 0=day..4=astronomical night
+    bool obsMoonUp[OBS_SEG] = {};             // Moon above the horizon at that segment
+    long obsSegEpoch0 = 0;                     // UTC epoch of segment 0 (== the compute time)
+    long obsDusk = 0, obsDawn = 0;             // astronomical-night window (UTC epoch), 0 = none found
+    bool obsDarkNow = false;                   // already in astronomical darkness at compute time
+    double obsMoonIllum = 0;                    // Moon illuminated fraction at the window (0..1)
+    long obsMoonUpMin = 0;                      // minutes the Moon is up within the dark window
+    bool obsValid = false;
+    unsigned long lastObsCalcMs = 0;
+    void RecomputeObserving();                 // refresh the cache from the on-device ephemeris
 
     // ntfy alerts (loop task)
     void CheckAlerts();                      // evaluate the toggleable triggers (launch / aurora)

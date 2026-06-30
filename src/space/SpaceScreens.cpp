@@ -843,6 +843,98 @@ void SpaceManager::DrawStarMap(BandCanvas& c)
     if (topName) { c.setTextSize(1); CenterText(c, String("brightest: ") + topName, SCREEN_SIZE - 22, dim); }
 }
 
+// ------------------------------------------------------------------- tonight's observing window
+void SpaceManager::DrawObserving(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg    = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim   = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint = space::ScaleColor(palette.faint, gf);
+    const uint32_t green = space::ScaleColor(lgfx::color888(120, 210, 140), gf); // "go" / dark
+
+    c.setTextSize(1); CenterText(c, "OBSERVING WINDOW", 14, dim);
+
+    if (!hasLatLon) { c.setTextSize(2); CenterText(c, "set location", SCREEN_SIZE_DIV_2 - 8, dim); return; }
+    if (!obsValid)  { c.setTextSize(2); CenterText(c, "awaiting clock", SCREEN_SIZE_DIV_2 - 8, dim); return; }
+
+    const int cx = SCREEN_SIZE_DIV_2, cy = SCREEN_SIZE_DIV_2;
+    const int sunOuter = SCREEN_SIZE_DIV_2 - 24, sunInner = sunOuter - 16;
+    const int moonOuter = sunInner - 3, moonInner = moonOuter - 6;
+
+    // 24h ring in local solar time: midnight at the bottom, noon at top, AM left / PM right.
+    auto solarHours = [&](long ep) -> double {
+        const double utcH = fmod((double)(((ep % 86400) + 86400) % 86400) / 3600.0, 24.0);
+        return fmod(utcH + deviceLon / 15.0 + 48.0, 24.0);
+    };
+    auto angleFor = [&](long ep) -> float { return (float)fmod(90.0 + solarHours(ep) / 24.0 * 360.0, 360.0); };
+
+    // Twilight-depth band colours: day -> faint, deepening blue through twilight, green at true night.
+    auto bandColor = [&](uint8_t b) -> uint32_t {
+        switch (b) {
+            case 0:  return faint;                                              // day
+            case 1:  return space::ScaleColor(lgfx::color888(40, 70, 120), gf);  // civil
+            case 2:  return space::ScaleColor(lgfx::color888(45, 110, 175), gf); // nautical
+            case 3:  return space::ScaleColor(lgfx::color888(60, 160, 220), gf); // astronomical twilight
+            default: return green;                                              // astronomical night
+        }
+    };
+
+    const long stepSec = 86400 / OBS_SEG;
+    const uint32_t moonCol = space::ScaleColor(lgfx::color888(200, 200, 210),
+                                               (0.35f + 0.65f * (float)obsMoonIllum) * gf);
+    for (int s = 0; s < OBS_SEG; ++s) {
+        const long ep = obsSegEpoch0 + (long)s * stepSec;
+        const float a = angleFor(ep);
+        c.fillArc(cx, cy, sunInner, sunOuter, a - 2.6f, a + 2.6f, bandColor(obsSunBand[s]));
+        if (obsMoonUp[s]) c.fillArc(cx, cy, moonInner, moonOuter, a - 2.6f, a + 2.6f, moonCol);
+    }
+
+    // "Now" marker just outside the ring.
+    {
+        const float a = angleFor(obsSegEpoch0) * (float)(M_PI / 180.0);
+        const int mx = cx + (int)((sunOuter + 8) * cosf(a));
+        const int my = cy + (int)((sunOuter + 8) * sinf(a));
+        c.fillCircle(mx, my, 3, fg);
+    }
+
+    auto solarHM = [&](long ep) -> String {
+        double h = solarHours(ep);
+        int hh = (int)h, mm = (int)((h - hh) * 60.0 + 0.5);
+        if (mm >= 60) { mm -= 60; hh = (hh + 1) % 24; }
+        char b[8]; snprintf(b, sizeof(b), "%02d:%02d", hh, mm); return String(b);
+    };
+
+    // Centre readout.
+    if (obsDusk && obsDawn) {
+        const long len = obsDawn - obsDusk;
+        char big[12];
+        if (len >= 3600) snprintf(big, sizeof(big), "%ldh %02ld", len / 3600, (len % 3600) / 60);
+        else             snprintf(big, sizeof(big), "%ldm", len / 60);
+        c.setTextSize(5); CenterText(c, big, cy - 44, green);
+        c.setTextSize(1); CenterText(c, "ASTRO-DARK TONIGHT", cy - 2, dim);
+        c.setTextSize(1);
+        CenterText(c, solarHM(obsDusk) + " - " + solarHM(obsDawn) + "  solar", cy + 16, faint);
+    } else if (obsDarkNow && !obsDawn) {
+        c.setTextSize(3); CenterText(c, "DARK", cy - 30, green);
+        c.setTextSize(1); CenterText(c, "astronomical night all window", cy + 2, dim);
+    } else {
+        c.setTextSize(2); CenterText(c, "NO ASTRO NIGHT", cy - 22, dim);
+        c.setTextSize(1); CenterText(c, "sun stays above -18 deg", cy + 2, faint);
+    }
+
+    // Moon line: how much it intrudes on the dark window.
+    const int pct = (int)(obsMoonIllum * 100 + 0.5);
+    String moon;
+    if (obsDusk && obsDawn && obsMoonUpMin <= 0) moon = "Moon down - dark skies";
+    else if (obsMoonUpMin > 0) {
+        char m[40];
+        if (obsMoonUpMin >= 60) snprintf(m, sizeof(m), "Moon %d%%  up %ldh%02ld", pct, obsMoonUpMin / 60, obsMoonUpMin % 60);
+        else                    snprintf(m, sizeof(m), "Moon %d%%  up %ldm", pct, obsMoonUpMin);
+        moon = m;
+    } else moon = "Moon " + String(pct) + "%";
+    c.setTextSize(1); CenterText(c, moon, cy + 36, pct >= 55 && obsMoonUpMin > 0 ? dim : faint);
+}
+
 // --------------------------------------------------------------------------- ISS visible pass
 void SpaceManager::DrawIssPass(BandCanvas& c)
 {

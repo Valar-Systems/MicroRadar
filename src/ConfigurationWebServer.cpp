@@ -22,6 +22,34 @@
 #ifndef SPACE_FEED_BASE
 #define SPACE_FEED_BASE ""
 #endif
+
+// User-toggleable Spacescope screens, in canonical rotation order. Drives the config-page on/off
+// checkbox grid (one "scr-<id>" box each) and the save that rebuilds the "space-screens" CSV.
+// Ids must match SpaceManager::idToScreen; "splash" is intentionally excluded (it's the internal
+// cold-start card, not user-selectable). Keep in sync with SpaceManager's Screen list.
+struct SpaceScreenDef { const char* id; const char* label; };
+static const SpaceScreenDef SPACE_SCREEN_DEFS[] = {
+    {"iss",       "ISS live tracker"},
+    {"isspass",   "ISS visible pass"},
+    {"launch",    "Rocket launch T-minus"},
+    {"kp",        "Geomagnetic Kp index"},
+    {"solarwind", "Solar wind"},
+    {"scales",    "NOAA space-wx scales"},
+    {"flare",     "Solar X-ray flare"},
+    {"aurora",    "Aurora forecast (local)"},
+    {"dsn",       "Deep Space Network"},
+    {"deepspace", "Deep-space probes"},
+    {"asteroid",  "Asteroid close approach"},
+    {"humans",    "Humans in space"},
+    {"moon",      "Moon phase"},
+    {"starmap",   "Night-sky star map"},
+    {"observing", "Tonight's observing window"},
+    {"eclipse",   "Next eclipse"},
+    {"meteor",    "Next meteor shower"},
+    {"cosmic",    "Cosmic clocks"},
+    {"clock",     "UTC clock"},
+};
+static const size_t SPACE_SCREEN_DEF_COUNT = sizeof(SPACE_SCREEN_DEFS) / sizeof(SPACE_SCREEN_DEFS[0]);
 #endif
 
 // HTML stored in flash
@@ -683,12 +711,10 @@ static const char CONFIG_HTML[] PROGMEM = R"(
 
                 <fieldset class="border border-sky-400 p-3">
                     <legend class="px-2">Screens</legend>
-                    <label class="flex flex-col gap-1">
-                        <span>Order &amp; enable (comma-separated; omit one to hide it):</span>
-                        <input name="space-screens" value='%SPACE_SCREENS%'
-                            class="border border-sky-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
-                    </label>
-                    <span class="text-xs text-sky-600 mt-1">ids: iss, isspass, launch, kp, solarwind, scales, flare, aurora, dsn, deepspace, asteroid, humans, moon, starmap, eclipse, meteor, cosmic, splash, clock. Empty rotates all. Each screen appears only when its feed has data; clock/moon/eclipse/meteor/cosmic always show. aurora needs a location.</span>
+                    <span class="text-xs text-sky-600">Tick the screens to include in the rotation. Each still appears only when it has data; clock / moon / eclipse / meteor / cosmic are always available. ISS pass, aurora and the star map need a location above.</span>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+                        %SPACE_SCREENS_HTML%
+                    </div>
                 </fieldset>
 
                 <fieldset class="border border-sky-400 p-3">
@@ -984,7 +1010,26 @@ void ConfigurationWebServer::Initialise() {
         const String brightness = prefs.getString("brightness", "255");
         const String spaceScreens = prefs.isKey("space-screens")
             ? prefs.getString("space-screens", "")
-            : String("iss,isspass,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,asteroid,humans,moon,starmap,eclipse,meteor,cosmic,clock");
+            : String("iss,isspass,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,asteroid,humans,moon,starmap,observing,eclipse,meteor,cosmic,clock");
+
+        // Build the screen on/off checkbox grid from the canonical table, reflecting the saved CSV
+        // (empty = all on, matching SpaceManager). Each box is "scr-<id>"; the save rebuilds the CSV.
+        const bool spaceScreensAll = spaceScreens.isEmpty();
+        String spaceScreensCsv = "," + spaceScreens + ",";
+        spaceScreensCsv.replace(" ", "");
+        spaceScreensCsv.toLowerCase();
+        String spaceScreensHtml;
+        for (size_t i = 0; i < SPACE_SCREEN_DEF_COUNT; ++i) {
+            const SpaceScreenDef& s = SPACE_SCREEN_DEFS[i];
+            const bool on = spaceScreensAll || spaceScreensCsv.indexOf("," + String(s.id) + ",") >= 0;
+            spaceScreensHtml += F("<label class=\"flex items-center gap-2\"><input type=\"checkbox\" class=\"accent-sky-400\" name=\"scr-");
+            spaceScreensHtml += s.id;
+            spaceScreensHtml += '"';
+            if (on) spaceScreensHtml += F(" checked");
+            spaceScreensHtml += F("><span>");
+            spaceScreensHtml += s.label;
+            spaceScreensHtml += F("</span></label>");
+        }
 #elif defined(FEATURE_SEISMIC)
         // FEATURE_SEISMIC: load the Seismic edition config fields. isKey() guards keep not-yet-saved
         // reads from logging NVS NOT_FOUND; the device talks to USGS directly (se-base-url empty).
@@ -1099,7 +1144,7 @@ void ConfigurationWebServer::Initialise() {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
-            [spaceBaseUrl, latitude, longitude, ntfyTopic, alertLaunch, alertAurora, alertFlare, alertIss, alertDsn, alertAsteroid, autoDimEnabled, brightness, spaceScreens]
+            [spaceBaseUrl, latitude, longitude, ntfyTopic, alertLaunch, alertAurora, alertFlare, alertIss, alertDsn, alertAsteroid, autoDimEnabled, brightness, spaceScreensHtml]
             (const String& var) -> String {
                 if (var == "SPACE_BASE_URL") return spaceBaseUrl;
                 if (var == "LATITUDE")       return latitude;
@@ -1113,7 +1158,7 @@ void ConfigurationWebServer::Initialise() {
                 if (var == "AL_ASTEROID")    return alertAsteroid == "true" ? "checked" : "";
                 if (var == "AUTODIM")        return autoDimEnabled == "true" ? "checked" : "";
                 if (var == "BRIGHTNESS")     return brightness;
-                if (var == "SPACE_SCREENS")  return spaceScreens;
+                if (var == "SPACE_SCREENS_HTML") return spaceScreensHtml;
                 if (var == "FW_VERSION")     return String(FW_VERSION);
                 return "";
             }
@@ -1259,7 +1304,20 @@ void ConfigurationWebServer::Initialise() {
         TrySaveParam("longitude");
         TrySaveParam("ntfy-topic");
         TrySaveParam("brightness");
-        TrySaveParam("space-screens");
+
+        // Screens: rebuild the CSV from the per-screen checkboxes (canonical order). Unchecked boxes
+        // are absent from the body, so hasParam() is the on/off signal. All-off saves "clock" so the
+        // device still shows the idle clock instead of falling back to "empty CSV = all on".
+        {
+            String csv;
+            for (size_t i = 0; i < SPACE_SCREEN_DEF_COUNT; ++i) {
+                if (request->hasParam(String("scr-") + SPACE_SCREEN_DEFS[i].id, true)) {
+                    if (csv.length()) csv += ",";
+                    csv += SPACE_SCREEN_DEFS[i].id;
+                }
+            }
+            prefs.putString("space-screens", csv.isEmpty() ? String("clock") : csv);
+        }
 
         // checkboxes: absent in the body when unchecked, so hasParam() is the on/off signal
         prefs.putString("sp-alert-launch", request->hasParam("sp-alert-launch", true) ? "true" : "false");

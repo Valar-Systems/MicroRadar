@@ -5,6 +5,7 @@
 #include <Sgp4.h>
 
 #include "Layout.h"
+#include "Astro.h"
 
 // Optional Valar space-feed backend base URL default. Normally NOT injected (Spacescope talks
 // directly to free public space APIs and bakes in nothing); guarded so the file compiles whether
@@ -84,6 +85,7 @@ void SpaceManager::Initialise()
         if (id == "humans")    { out = Screen::Humans;    return true; }
         if (id == "moon")      { out = Screen::Moon;      return true; }
         if (id == "starmap")   { out = Screen::StarMap;   return true; }
+        if (id == "observing") { out = Screen::Observing; return true; }
         if (id == "eclipse")   { out = Screen::Eclipse;   return true; }
         if (id == "meteor")    { out = Screen::Meteor;    return true; }
         if (id == "cosmic")    { out = Screen::CosmicClock; return true; }
@@ -155,6 +157,13 @@ void SpaceManager::Update()
         }
     }
 
+    // Refresh the on-device "observing window" cache ~once a minute (the geometry drifts slowly).
+    if (hasLatLon) {
+        const time_t now = time(nullptr);
+        if (now > 1600000000 && (!obsValid || millis() - lastObsCalcMs > 60000UL))
+            RecomputeObserving();
+    }
+
     CheckAlerts();
     UpdateBrightness();
     HandleTouch();
@@ -187,6 +196,7 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
         case Screen::Humans:    DrawHumans(backbuffer); break;
         case Screen::Moon:      DrawMoon(backbuffer); break;
         case Screen::StarMap:   DrawStarMap(backbuffer); break;
+        case Screen::Observing: DrawObserving(backbuffer); break;
         case Screen::Eclipse:   DrawEclipse(backbuffer); break;
         case Screen::Meteor:    DrawMeteor(backbuffer); break;
         case Screen::CosmicClock: DrawCosmicClock(backbuffer); break;
@@ -219,6 +229,7 @@ bool SpaceManager::HasData(Screen s) const
         case Screen::Humans: return feed.Crew().valid && feed.Crew().number > 0;
         case Screen::Moon:   return true; // computed on-device, always available
         case Screen::StarMap: return hasLatLon; // on-device sky map; needs observer location
+        case Screen::Observing: return hasLatLon && obsValid; // on-device dark-hours window; needs location + clock
         case Screen::Eclipse:     return true; // baked table, on-device
         case Screen::Meteor:      return true; // baked table, on-device
         case Screen::CosmicClock: return true; // on-device clock faces
@@ -450,6 +461,67 @@ void SpaceManager::RecomputePass()
                       passRiseEpoch - (long)now, passMaxEl, (int)passVisible);
     } else {
         passValid = false;
+    }
+}
+
+void SpaceManager::RecomputeObserving()
+{
+    const time_t now = time(nullptr);
+    if (!hasLatLon || now <= 1600000000) { obsValid = false; return; }
+    lastObsCalcMs = millis();
+    obsSegEpoch0 = (long)now;
+
+    const long stepSec = 86400 / OBS_SEG; // 20-min steps spanning the next 24h
+    // Sample the next 24h of Sun + Moon altitude into the ring arrays (on-device ephemeris).
+    for (int s = 0; s < OBS_SEG; ++s) {
+        const time_t e = now + (time_t)s * stepSec;
+        const double sunAlt = space::astro::SunAltDeg(e, deviceLat, deviceLon);
+        uint8_t band;
+        if      (sunAlt > -0.833) band = 0; // day
+        else if (sunAlt > -6.0)   band = 1; // civil twilight
+        else if (sunAlt > -12.0)  band = 2; // nautical twilight
+        else if (sunAlt > -18.0)  band = 3; // astronomical twilight
+        else                      band = 4; // astronomical night ("go" time)
+        obsSunBand[s] = band;
+        obsMoonUp[s] = space::astro::MoonAltDeg(e, deviceLat, deviceLon) > 0.0;
+    }
+
+    // Derive the upcoming astronomical-night window (band 4) from the sampled ring.
+    obsDarkNow = (obsSunBand[0] == 4);
+    obsDusk = obsDawn = 0;
+    int duskSeg = -1, dawnSeg = -1;
+    if (obsDarkNow) {
+        obsDusk = (long)now;                            // already dark; window runs to dawn
+        for (int s = 1; s < OBS_SEG; ++s) if (obsSunBand[s] != 4) { dawnSeg = s; break; }
+    } else {
+        for (int s = 1; s < OBS_SEG; ++s) {
+            if (duskSeg < 0 && obsSunBand[s] == 4) duskSeg = s;                 // fall into night
+            else if (duskSeg >= 0 && obsSunBand[s] != 4) { dawnSeg = s; break; } // climb back out
+        }
+        if (duskSeg >= 0) obsDusk = (long)now + (long)duskSeg * stepSec;
+    }
+    if (dawnSeg >= 0) obsDawn = (long)now + (long)dawnSeg * stepSec;
+
+    // Moon presence across the dark window + its illuminated fraction (drives "truly dark" minutes).
+    obsMoonUpMin = 0;
+    const int startSeg = obsDarkNow ? 0 : duskSeg;
+    if (obsDusk && dawnSeg >= 0 && startSeg >= 0)
+        for (int s = startSeg; s < dawnSeg; ++s)
+            if (obsMoonUp[s]) obsMoonUpMin += stepSec / 60;
+    double mra, mdec, illum;
+    const time_t midNight = (obsDusk && obsDawn) ? (time_t)(obsDusk + (obsDawn - obsDusk) / 2) : now;
+    space::astro::MoonRaDec(midNight, mra, mdec, illum);
+    obsMoonIllum = illum;
+
+    obsValid = true;
+
+    // One-shot field check: confirm the on-device ephemeris produced a sane window + moon.
+    static bool obsLogged = false;
+    if (!obsLogged) {
+        obsLogged = true;
+        Serial.printf("[space] observing: darkNow=%d dusk=+%lds dawn=+%lds moon=%d%% up=%ldmin\n",
+                      (int)obsDarkNow, obsDusk ? obsDusk - (long)now : -1,
+                      obsDawn ? obsDawn - (long)now : -1, (int)(obsMoonIllum * 100 + 0.5), obsMoonUpMin);
     }
 }
 
