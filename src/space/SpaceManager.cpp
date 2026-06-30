@@ -64,6 +64,9 @@ void SpaceManager::Initialise()
     enabledOrder.clear();
     const String screensCfg = configServer.GetStoredString("space-screens");
     auto idToScreen = [](const String& id, Screen& out) -> bool {
+        if (id == "iss")    { out = Screen::Iss;    return true; }
+        if (id == "launch") { out = Screen::Launch; return true; }
+        if (id == "kp")     { out = Screen::Kp;     return true; }
         if (id == "splash") { out = Screen::Splash; return true; }
         if (id == "clock")  { out = Screen::Clock;  return true; }
         return false;
@@ -85,6 +88,16 @@ void SpaceManager::Initialise()
     deviceLat = latStr.toDouble();
     deviceLon = lonStr.toDouble();
 
+    // Background feed poller (idempotent spawn, then apply config). Empty base = direct public APIs.
+    SpaceFeedClient::Config fcfg;
+    fcfg.baseUrl = backendBaseUrl;
+    fcfg.hasLatLon = hasLatLon;
+    fcfg.lat = deviceLat;
+    fcfg.lon = deviceLon;
+    fcfg.intervalScale = 1.0f;
+    feed.Begin();
+    feed.Configure(fcfg);
+
     currentBrightness = configuredBrightness;
     tft.setBrightness(currentBrightness);
     lastBrightnessCheck = 0;
@@ -96,7 +109,8 @@ void SpaceManager::Initialise()
 
 void SpaceManager::Update()
 {
-    // Stage 2 will Poll() the SpaceFeedClient here and check ntfy alert triggers.
+    feed.Poll();
+    // Stage 3 will check ntfy alert triggers here (launch T-10/T-1, high Kp, ...).
     UpdateBrightness();
     HandleTouch();
     AutoRotate();
@@ -111,6 +125,9 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
     if (!inRot && !rot.empty()) current = rot.front();
 
     switch (current) {
+        case Screen::Iss:    DrawIss(backbuffer); break;
+        case Screen::Launch: DrawLaunch(backbuffer); break;
+        case Screen::Kp:     DrawKp(backbuffer); break;
         case Screen::Splash: DrawSplash(backbuffer); break;
         case Screen::Clock:
         default:             DrawClock(backbuffer); break;
@@ -122,7 +139,11 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
 bool SpaceManager::HasData(Screen s) const
 {
     switch (s) {
-        case Screen::Splash: return true; // static welcome card until the feeds populate
+        case Screen::Iss:    return feed.Iss().valid;
+        case Screen::Launch: return !feed.Launches().empty();
+        case Screen::Kp:     return feed.Wx().valid;
+        // Cold-start welcome: only while no live feed has data yet (so it drops out once they do).
+        case Screen::Splash: return !(feed.Iss().valid || !feed.Launches().empty() || feed.Wx().valid);
         case Screen::Clock:  return true; // always-available idle screen
         default:             return false;
     }
@@ -223,51 +244,24 @@ void SpaceManager::DrawScreenDots(BandCanvas& c, const std::vector<Screen>& rot)
     }
 }
 
-// ----------------------------------------------------------------------------- screens
-
-void SpaceManager::DrawSplash(BandCanvas& c)
-{
-    const uint32_t fg     = space::ScaleColor(palette.fg, GlowFactor());
-    const uint32_t accent = space::ScaleColor(palette.accent, GlowFactor());
-    const uint32_t faint  = space::ScaleColor(palette.faint, GlowFactor());
-
-    // A few fixed "stars" so the card reads as space, deterministic so the banded passes match.
-    static const struct { int x, y, r; } stars[] = {
-        {54, 70, 1}, {120, 44, 1}, {210, 58, 2}, {300, 40, 1}, {360, 96, 1},
-        {40, 180, 1}, {380, 210, 2}, {70, 300, 1}, {150, 360, 1}, {260, 350, 2},
-        {340, 320, 1}, {200, 110, 1}, {90, 130, 1}, {320, 160, 1}, {180, 300, 1},
-    };
-    for (const auto& s : stars)
-        c.fillCircle(s.x, s.y, s.r, s.r > 1 ? accent : faint);
-
-    c.setTextSize(4);
-    CenterText(c, "SPACESCOPE", SCREEN_SIZE_DIV_2 - 40, fg);
-    c.setTextSize(1);
-    CenterText(c, "a desk window into everything above you", SCREEN_SIZE_DIV_2 + 4, faint);
-    c.setTextSize(2);
-    CenterText(c, "awaiting feeds...", SCREEN_SIZE_DIV_2 + 44, accent);
-}
-
-void SpaceManager::DrawClock(BandCanvas& c)
-{
-    const uint32_t fg    = space::ScaleColor(palette.fg, GlowFactor());
-    const uint32_t faint = space::ScaleColor(palette.faint, GlowFactor());
-
-    const time_t utc = time(nullptr);
-    char hhmmss[16] = "--:--:--";
-    if (utc > 1600000000) { // NTP synced
-        struct tm t;
-        gmtime_r(&utc, &t);
-        snprintf(hhmmss, sizeof(hhmmss), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
-    }
-
-    c.setTextSize(1);
-    CenterText(c, "UTC", SCREEN_SIZE_DIV_2 - 46, faint);
-    c.setTextSize(5);
-    CenterText(c, hhmmss, SCREEN_SIZE_DIV_2 - 28, fg);
-}
+// The screens (DrawIss / DrawLaunch / DrawKp / DrawSplash / DrawClock) live in SpaceScreens.cpp.
 
 // ----------------------------------------------------------------------------- helpers
+
+String SpaceManager::FormatTMinus(long secondsToT0)
+{
+    const bool before = secondsToT0 >= 0;
+    long s = before ? secondsToT0 : -secondsToT0;
+    const long days = s / 86400;
+    const long h = (s % 86400) / 3600;
+    const long m = (s % 3600) / 60;
+    const long sec = s % 60;
+    const char sign = before ? '-' : '+';
+    char buf[32];
+    if (days > 0) snprintf(buf, sizeof(buf), "T%c%ldd %02ld:%02ld", sign, days, h, m);
+    else          snprintf(buf, sizeof(buf), "T%c%02ld:%02ld:%02ld", sign, h, m, sec);
+    return String(buf);
+}
 
 std::vector<String> SpaceManager::SplitList(const String& s, bool lower)
 {

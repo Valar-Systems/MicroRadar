@@ -9,6 +9,7 @@
 #include "LGFX.h"
 #include "BandCanvas.h"
 #include "SpaceTheme.h"
+#include "SpaceFeedClient.h"
 
 // FEATURE_SPACE top-level controller -- the Spacescope app: a desk window onto live space data
 // (ISS, rocket launches, space weather, deep-space probes) built from the same boards + shared
@@ -29,7 +30,8 @@ class SpaceManager
 public:
     SpaceManager(ConfigurationWebServer& config, OpenSkyAuthTokenHandler& auth,
                  HttpRequestManager& httpManager, LGFX& tftGfx)
-        : configServer(config), authHandler(auth), http(httpManager), tft(tftGfx)
+        : configServer(config), authHandler(auth), http(httpManager), tft(tftGfx),
+          feed(httpManager)
     {
     }
     ~SpaceManager() = default;
@@ -40,16 +42,18 @@ public:
 
 private:
     // The screens. Order here is the default rotation order; the user can enable/disable and
-    // reorder via the "space-screens" CSV config key. Clock is the idle screen and is always
-    // available, so BuildRotation() is never empty. Later stages add ISS / Launch / Kp / DSN / ...
+    // reorder via the "space-screens" CSV config key. Clock is the always-available idle screen,
+    // so BuildRotation() is never empty; Splash is a cold-start welcome shown only until a live
+    // feed has data. Later stages add more (DSN, Voyager, flares, ISS passes, ...).
     enum class Screen : uint8_t {
-        Splash, Clock, COUNT
+        Iss, Launch, Kp, Splash, Clock, COUNT
     };
 
     ConfigurationWebServer& configServer;
-    OpenSkyAuthTokenHandler& authHandler;   // reserved for Stage-2 OpenSky-direct feeds (ABNCP-style)
+    OpenSkyAuthTokenHandler& authHandler;   // reserved for a later OpenSky-direct feed (ABNCP-style)
     HttpRequestManager& http;
     LGFX& tft;
+    SpaceFeedClient feed;
 
     // ---- config-derived state (set in Initialise) ----
     space::Palette palette = space::PaletteDefault();
@@ -85,7 +89,10 @@ private:
     void HandleTouch();
     void DrawScreenDots(BandCanvas& c, const std::vector<Screen>& rot) const;
 
-    // screens
+    // screens (defined in SpaceScreens.cpp)
+    void DrawIss(BandCanvas& c);
+    void DrawLaunch(BandCanvas& c);
+    void DrawKp(BandCanvas& c);
     void DrawSplash(BandCanvas& c);
     void DrawClock(BandCanvas& c);
 
@@ -95,5 +102,7 @@ private:
 
     // small helpers
     static std::vector<String> SplitList(const String& s, bool lower);
+    // "T-HH:MM:SS" / "T-2d 03:14" before T0; "T+HH:MM:SS" / "T+2d 03:14" after (negative = elapsed).
+    static String FormatTMinus(long secondsToT0);
     void CenterText(BandCanvas& c, const String& s, int y, uint32_t color);
 };
