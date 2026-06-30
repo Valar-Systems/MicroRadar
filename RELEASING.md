@@ -63,6 +63,18 @@ and a CI slug prefixed to match so a Spacescope device never pulls a radar or EA
 
 Same `version.txt` gate (one `FW_VERSION` bump releases radar, EAM, and Spacescope together).
 
+## Seismic builds — another separate OTA channel
+
+The `blipscope-seismic-*` envs build a fourth **product** (the Seismic edition, `-DFEATURE_SEISMIC`; see
+[CLAUDE.md](CLAUDE.md)) from the same boards. Same arrangement as EAM/Space: `-DFW_OTA_PREFIX="seismic-"`,
+and a CI slug prefixed to match so a Seismic device never pulls a radar, EAM, or Space image:
+
+| env | slug (CI + OTA asset) |
+| --- | --- |
+| `blipscope-seismic-s3-146` | `seismic-s3-146` → `firmware-seismic-s3-146.bin` |
+
+Same `version.txt` gate (one `FW_VERSION` bump releases radar, EAM, Spacescope, and Seismic together).
+
 ## Legacy note: the retired C3
 
 The original ESP32-C3 Kit is retired — Blipscope is S3-only going forward. The workflow no

@@ -32,6 +32,9 @@ jobs:
           # FEATURE_SPACE product: same boards, Spacescope firmware, own OTA channel
           # (firmware-space-<slug>.bin -- the slug must match FW_OTA_PREFIX + variant::SLUG).
           - { env: blipscope-space-s3-146, slug: space-s3-146 }
+          # FEATURE_SEISMIC product: same boards, Seismic-edition firmware, own OTA channel
+          # (firmware-seismic-<slug>.bin -- the slug must match FW_OTA_PREFIX + variant::SLUG).
+          - { env: blipscope-seismic-s3-146, slug: seismic-s3-146 }
           # - { env: blipscope-lite-s3-128,       slug: s3-128 }
           # - { env: blipscope-pro-s3-175-amoled, slug: s3-175-amoled }
     steps:
