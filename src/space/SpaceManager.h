@@ -74,6 +74,20 @@ private:
     bool nightDim = false;
     unsigned long lastBrightnessCheck = 0;
 
+    // ---- ntfy alerts (reuses the shared ntfy-topic key + POST pattern, like the radar/EAM) ----
+    String ntfyTopic;                        // ntfy.sh topic; empty disables all alerts
+    bool alertLaunch = true;                 // launch crossing T-10 / T-1
+    bool alertAurora = true;                 // high Kp (aurora likely)
+    bool alertFlare = false;                 // reserved: needs the GOES X-ray feed (later stage)
+    bool alertIss = false;                   // reserved: needs ISS pass prediction (later stage)
+    bool alertDsn = false;                   // reserved: needs the DSN feed (later stage)
+    // edge state so an alert fires once per event, not every frame (persists across config reloads)
+    long alertLaunchT0 = 0;                  // t0 the fired-flags below refer to (reset when it changes)
+    long lastLaunchSecs = 0;                 // previous T-minus seconds, for up->down crossing detection
+    bool firedT10 = false, firedT1 = false;  // launch lead-time edges already consumed
+    bool kpAlerted = false;                  // high-Kp episode already alerted (reset when Kp drops)
+    unsigned long lastNotifyMs = 0;          // throttle ntfy POSTs
+
     // ---- touch / gestures ----
     bool wasTouched = false;
     int touchStartX = 0, touchStartY = 0;
@@ -99,6 +113,10 @@ private:
     // brightness
     void UpdateBrightness();
     float GlowFactor() const { return nightDim ? 0.5f : 1.0f; }
+
+    // ntfy alerts (loop task)
+    void CheckAlerts();                      // evaluate the toggleable triggers (launch / aurora)
+    void SendNtfy(const String& title, const String& body, const String& tags, int priority);
 
     // small helpers
     static std::vector<String> SplitList(const String& s, bool lower);

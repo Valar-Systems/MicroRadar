@@ -17,6 +17,11 @@ namespace {
 constexpr unsigned long AUTO_DWELL_MS    = 8000;   // ms per screen when auto-rotating
 constexpr unsigned long INTERACT_HOLD_MS = 30000;  // pause auto-rotate this long after a touch
 
+// Alert thresholds.
+constexpr long  LAUNCH_T10_S      = 600;  // fire the T-10 alert once inside this lead time
+constexpr long  LAUNCH_T1_S       = 60;   // fire the T-1 alert once inside this lead time
+constexpr float KP_AURORA_THRESH  = 6.0f; // Kp >= this (G2+) -> "aurora likely"
+
 double Deg2Rad(double d) { return d * M_PI / 180.0; }
 
 // Low-precision solar elevation (degrees) at lat/lon for a UTC epoch -- drives the same night
@@ -98,6 +103,19 @@ void SpaceManager::Initialise()
     feed.Begin();
     feed.Configure(fcfg);
 
+    // ntfy alerts (shared ntfy-topic key + per-trigger toggles). An empty topic disables all.
+    // The edge-state flags are NOT reset here, so saving config mid-event doesn't re-fire.
+    ntfyTopic = configServer.GetStoredString("ntfy-topic");
+    auto boolCfg = [&](const char* key, bool def) {
+        const String v = configServer.GetStoredString(key);
+        return v.isEmpty() ? def : (v == "true");
+    };
+    alertLaunch = boolCfg("sp-alert-launch", true);
+    alertAurora = boolCfg("sp-alert-aurora", true);
+    alertFlare = boolCfg("sp-alert-flare", false);  // reserved (no GOES X-ray feed yet)
+    alertIss = boolCfg("sp-alert-iss", false);      // reserved (no ISS-pass feed yet)
+    alertDsn = boolCfg("sp-alert-dsn", false);      // reserved (no DSN feed yet)
+
     currentBrightness = configuredBrightness;
     tft.setBrightness(currentBrightness);
     lastBrightnessCheck = 0;
@@ -110,7 +128,7 @@ void SpaceManager::Initialise()
 void SpaceManager::Update()
 {
     feed.Poll();
-    // Stage 3 will check ntfy alert triggers here (launch T-10/T-1, high Kp, ...).
+    CheckAlerts();
     UpdateBrightness();
     HandleTouch();
     AutoRotate();
@@ -225,6 +243,68 @@ void SpaceManager::UpdateBrightness()
         currentBrightness = target;
         tft.setBrightness(target);
     }
+}
+
+void SpaceManager::CheckAlerts()
+{
+    const time_t nowUtc = time(nullptr);
+    const bool synced = nowUtc > 1600000000;
+
+    // --- Launch: fire once at T-10 min and once at T-1 min for the next launch with a real time.
+    // Edge-detected on the T-minus seconds crossing each threshold downward, so a boot mid-window
+    // doesn't emit a mislabeled alert (on first sight of a launch we seed lastLaunchSecs = now).
+    const std::vector<space::Launch>& ls = feed.Launches();
+    if (synced && !ls.empty() && ls.front().precise && ls.front().t0Epoch > 0) {
+        const space::Launch& L = ls.front();
+        const long secs = L.t0Epoch - (long)nowUtc;
+        if (L.t0Epoch != alertLaunchT0) {        // a new launch became next: re-arm
+            alertLaunchT0 = L.t0Epoch;
+            firedT10 = firedT1 = false;
+            lastLaunchSecs = secs;               // seed so first sight isn't treated as a crossing
+        }
+        String who = L.provider;
+        if (L.vehicle.length()) who += " " + L.vehicle;
+        if (L.mission.length()) who += " - " + L.mission;
+        if (!firedT10 && lastLaunchSecs > LAUNCH_T10_S && secs <= LAUNCH_T10_S) {
+            firedT10 = true;
+            if (alertLaunch) SendNtfy("Launch T-10 min", who, "rocket", 4);
+        }
+        if (!firedT1 && lastLaunchSecs > LAUNCH_T1_S && secs <= LAUNCH_T1_S) {
+            firedT1 = true;
+            if (alertLaunch) SendNtfy("Launch imminent (T-1 min)", who, "rocket,rotating_light", 5);
+        }
+        lastLaunchSecs = secs;
+    }
+
+    // --- Aurora: fire once when Kp crosses up to the threshold; re-arm when it drops back below.
+    const space::SpaceWx& wx = feed.Wx();
+    if (wx.valid) {
+        const bool high = wx.kp >= KP_AURORA_THRESH;
+        if (high && !kpAlerted) {
+            kpAlerted = true;
+            int g = (int)floorf(wx.kp) - 4;      // Kp 5..9 -> G1..G5
+            if (g < 1) g = 1; else if (g > 5) g = 5;
+            char body[48];
+            snprintf(body, sizeof(body), "Kp %.1f (G%d) - aurora likely", wx.kp, g);
+            if (alertAurora) SendNtfy("Aurora watch", body, "zap", 4);
+        } else if (!high) {
+            kpAlerted = false;
+        }
+    }
+}
+
+void SpaceManager::SendNtfy(const String& title, const String& body, const String& tags, int priority)
+{
+    if (ntfyTopic.isEmpty()) return;
+    if (lastNotifyMs != 0 && millis() - lastNotifyMs < 5000) return; // throttle bursts
+    lastNotifyMs = millis();
+
+    // Blocking POST on the loop task, serialized with the feed worker via HttpRequestManager's
+    // mutex -- the same pattern the radar/EAM use. Triggers are rare, so the brief stall is fine.
+    const std::vector<std::pair<String, String>> headers = {
+        {"Title", title}, {"Tags", tags}, {"Priority", String(priority)}
+    };
+    (void)http.Post(String("https://ntfy.sh/") + ntfyTopic, body, headers);
 }
 
 void SpaceManager::DrawScreenDots(BandCanvas& c, const std::vector<Screen>& rot) const
