@@ -17,8 +17,10 @@ Blipscope is a small open-source gadget for your desk: an ESP32-S3 driving a rou
 | 📡 | **[Aviation Edition](#-aviation-edition)** *(the original)* | A live **flight radar**. Aircraft plotted around your location from public ADS-B data, with tap-to-inspect detail cards, a spotting logbook, and a "look up!" overhead alert. |
 | 📟 | **[STRATCOM Edition](#-stratcom-edition)** | An **HFGCS Emergency Action Message monitor**. A command-console ticker of nuclear-command radio traffic, an activity gauge, Skyking codewords, an airborne-command-post watch, HF propagation, and ICBM-test windows. |
 | 🛰️ | **[Space Edition](#-space-edition)** | **Spacescope** — live space data. The **ISS** ground track, a **T-minus countdown** to the next rocket launch, and a **geomagnetic aurora gauge**, straight from free public APIs. |
+| 🌐 | **[Seismic Edition](#-seismic-edition)** | A live **earthquake radar**. Quakes plotted by bearing and distance from the keyless USGS feed, with magnitude rings, tap-to-inspect cards, and alerts for big, nearby, or tsunami-flagged events. |
+| 🐦 | **[Birding Edition](#-birding-edition)** | A **notable-sightings radar**. Birds reported near you from eBird, on a tap-to-inspect radar plus rotating screens (notable ticker, day-list count, nearest hotspot, target species) — and a ping when a rarity shows up. |
 
-All three run on the same Blipscope board; the Edition is chosen by the firmware you flash (and a kit can be re-flashed to a different Edition any time). [More editions are on the way](#more-editions-on-the-way).
+All five run on the same Blipscope board; the Edition is chosen by the firmware you flash (and a kit can be re-flashed to a different Edition any time). [More editions are on the way](#more-editions-on-the-way).
 
 ---
 
@@ -69,13 +71,35 @@ It pings your phone when a launch is imminent (T-10 / T-1) or the aurora is stir
 
 ### 📖 [Full guide → Space Edition (Spacescope) on the Wiki](https://github.com/Valar-Systems/Blipscope/wiki/Space-Edition)
 
+## 🌐 Seismic Edition
+
+Flash the Seismic firmware and the same device becomes a live **earthquake radar** — built on the same polar view as the Aviation Edition, but plotting quakes instead of aircraft, straight from the **keyless [USGS](https://earthquake.usgs.gov) feed** (no account, no API key):
+
+- **Live quake radar** — recent earthquakes plotted by bearing and distance around your location, sized and coloured by magnitude, with static range rings instead of a sweep.
+- **Tap to inspect** — touch a quake to open a detail card with magnitude, depth, place name, and how long ago it struck.
+- **List & stats screens** — swipe between the radar, a list of recent quakes, and at-a-glance statistics (largest today, counts by magnitude).
+- **Two queries at once** — a worldwide "recent significant" view and a radius-bounded "near me" view, so distant big ones and small local ones both show up.
+- **Phone alerts** — get an [ntfy](https://ntfy.sh) notification for a big quake anywhere, a quake near you, or any event carrying a **tsunami** advisory. Seeded at boot so the backlog never pings you.
+
+It reuses the same Wi-Fi setup, web config, alerts, and over-the-air updates as the radar, on its own firmware update channel.
+
+## 🐦 Birding Edition
+
+Flash the Birding firmware and the device becomes a desk window onto the birds being reported near you — live from the **[Cornell Lab eBird API](https://ebird.org)**. It's a **hybrid** of the two interface styles: a tap-to-inspect radar *and* a set of rotating data screens.
+
+- **Sightings radar** — recent reports plotted around your location, with **notable** birds ringed in gold; tap any blip for a detail card (species, count, location, how long ago).
+- **Rotating screens** — a **notable ticker** of recent rarities, a **day-list** species count for your area, your **nearest hotspot**, and a **target species** watchlist — auto-rotating, skipping any feed with no data, and swipeable by hand.
+- **Phone alerts** — an [ntfy](https://ntfy.sh) ping the moment a **notable** bird is reported nearby, or when one of your **target species** turns up. Seeded at boot so only fresh sightings notify you.
+- **Bring your own key** — eBird's API is free; you enter your own token on the config page (it's never baked into the firmware, and it's masked once saved). Nothing is polled until a token and a location are set.
+
+Same shared Wi-Fi setup, web config, alerts, and OTA as the other editions, on its own update channel.
+
 ## More editions on the way
 
 Every Edition is the same recipe: pick a **free public data feed**, draw a few glanceable screens, and wire up phone alerts — the Wi-Fi setup, web config, OTA, and ntfy come for free from the shared platform. That makes new Editions cheap to add, and there's a long list of streams that would look great on a round desk display. Some we're considering:
 
 **Things you plot around you** *(reusing the Aviation radar's polar view):*
 
-- 🌐 **Seismic Edition** — live earthquakes by bearing and distance from the keyless USGS feed, with magnitude rings and a phone alert for big or nearby quakes (and tsunami advisories).
 - 🔥 **Wildfire Edition** — active fire detections radiating around you from NASA's FIRMS satellites, with an "it's getting closer" proximity alert — for fire-season desks.
 - 🌠 **Skywatch Edition** — every satellite overhead right now, not just the ISS: bright passes and Starlink trains plotted on a live sky-dome, computed on-device from public orbital data.
 - 🚢 **Maritime Edition** — ship traffic (AIS) around a harbour or coastline, the radar's natural sibling for the coast.
@@ -83,7 +107,6 @@ Every Edition is the same recipe: pick a **free public data feed**, draw a few g
 **Things you read as a dial or ticker** *(reusing the Space/STRATCOM rotating screens):*
 
 - 🎣 **Angler Edition** — your river's gauge height and water temperature plus a solunar "bite window," pinging you when conditions turn on, from keyless USGS water data.
-- 🐦 **Birding Edition** — notable bird sightings near you from eBird, with a phone alert the moment a rarity shows up in your area.
 - ⛅ **Weather Edition** — local conditions, a "next rain" countdown dial, and a 36-hour forecast ribbon around the bezel, from the keyless Open-Meteo feed.
 - 🌫️ **Air Quality Edition** — a glanceable AQI / UV / pollen dial, pinging you when the air outside turns unhealthy.
 - ₿ **Mempool Edition** — live Bitcoin fees, block height, and network hashrate on a dial, from the keyless mempool.space API.
@@ -127,17 +150,19 @@ If the board doesn't reboot into the new firmware automatically, hold the **BOOT
 Each Edition is a separate compile-time build from this one repo, one PlatformIO env each (see [platformio.ini](platformio.ini)). Pick the env for the edition and board you want:
 
 ```sh
-pio run -e blipscope-s3-146       -t upload   # 📡 Aviation  — S3 1.46" AMOLED (default)
-pio run -e blipscope-pro-s3-21    -t upload   # 📡 Aviation  — S3 2.1" RGB panel
-pio run -e blipscope-eam-s3-146   -t upload   # 📟 STRATCOM — EAM monitor, S3 1.46" AMOLED
-pio run -e blipscope-space-s3-146 -t upload   # 🛰️ Space     — Spacescope, S3 1.46" AMOLED
+pio run -e blipscope-s3-146         -t upload   # 📡 Aviation  — S3 1.46" AMOLED (default)
+pio run -e blipscope-pro-s3-21      -t upload   # 📡 Aviation  — S3 2.1" RGB panel
+pio run -e blipscope-eam-s3-146     -t upload   # 📟 STRATCOM — EAM monitor, S3 1.46" AMOLED
+pio run -e blipscope-space-s3-146   -t upload   # 🛰️ Space     — Spacescope, S3 1.46" AMOLED
+pio run -e blipscope-seismic-s3-146 -t upload   # 🌐 Seismic   — USGS quake radar, S3 1.46" AMOLED
+pio run -e blipscope-birding-s3-146 -t upload   # 🐦 Birding   — eBird sightings, S3 1.46" AMOLED
 ```
 
-The `eam-` and `space-` envs build the **STRATCOM** and **Space** editions respectively. They reuse the same boards, Wi-Fi setup, web config, and OTA, but compile a different app and ship on their own OTA channel (`firmware-eam-<slug>.bin` / `firmware-space-<slug>.bin`), so a device only ever flashes the edition it was built for. Developer notes — including how to add a new edition or SKU — are in [CLAUDE.md](CLAUDE.md) and [RELEASING.md](RELEASING.md).
+The `eam-`, `space-`, `seismic-`, and `birding-` envs build the **STRATCOM**, **Space**, **Seismic**, and **Birding** editions respectively. They reuse the same boards, Wi-Fi setup, web config, and OTA, but compile a different app and ship on their own OTA channel (`firmware-<edition>-<slug>.bin`), so a device only ever flashes the edition it was built for. Developer notes — including how to add a new edition or SKU — are in [CLAUDE.md](CLAUDE.md) and [RELEASING.md](RELEASING.md).
 
 ## Setup & Usage
 
-The first-boot Wi-Fi setup and the web config page work the same on every edition. The OpenSky and "run your own receiver" sections are specific to the **Aviation Edition**; the STRATCOM and Space editions have their own settings, documented on their wiki pages above.
+The first-boot Wi-Fi setup and the web config page work the same on every edition. The OpenSky and "run your own receiver" sections are specific to the **Aviation Edition**; the other editions have their own settings (the Seismic and Birding editions, like the radar, take a **Location** for their range, and Birding takes your free eBird API token).
 
 ### First boot
 
