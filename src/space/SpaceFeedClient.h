@@ -61,6 +61,8 @@ private:
     std::vector<space::Launch> launches;
     space::SpaceWx wx;
 
+    bool firstLogged[F_COUNT] = {}; // log a one-line summary the first time each feed lands
+
     // worker task
     TaskHandle_t taskHandle = nullptr;
     QueueHandle_t reqQueue = nullptr;  // loop -> worker: SpaceFetchRequest*

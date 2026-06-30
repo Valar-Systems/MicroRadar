@@ -51,6 +51,7 @@ void SpaceFeedClient::Configure(const Config& newCfg)
     for (int i = 0; i < F_COUNT; ++i) {
         feeds[i].failCount = 0;
         feeds[i].nextDueMs = now + (uint32_t)i * 400 + 300;
+        firstLogged[i] = false; // re-confirm each feed after a (re)configure
     }
 }
 
@@ -160,6 +161,26 @@ void SpaceFeedClient::ApplyResult(const SpaceFetchResult& res)
         case space::SpaceEndpoint::Kp:
             wx = res.wx;
             break;
+    }
+
+    // One-line confirmation the first time each feed lands (handy for field/serial diagnostics).
+    if (!firstLogged[f]) {
+        firstLogged[f] = true;
+        switch (res.endpoint) {
+            case space::SpaceEndpoint::Iss:
+                Serial.printf("[space] ISS ok: lat=%.1f lon=%.1f alt=%.0fkm %s\n",
+                              iss.lat, iss.lon, iss.altKm, iss.sunlit ? "sunlit" : "eclipsed");
+                break;
+            case space::SpaceEndpoint::Launch:
+                Serial.printf("[space] launch ok: %u upcoming; next=%s / %s\n",
+                              (unsigned)launches.size(),
+                              launches.empty() ? "-" : launches.front().provider.c_str(),
+                              launches.empty() ? "-" : launches.front().mission.c_str());
+                break;
+            case space::SpaceEndpoint::Kp:
+                Serial.printf("[space] Kp ok: %.2f (%u samples)\n", wx.kp, (unsigned)wx.history.size());
+                break;
+        }
     }
 }
 
