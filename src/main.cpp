@@ -14,9 +14,10 @@
 #include "OpenSkyAuthTokenHandler.h"
 #include "OtaUpdater.h"
 // The active app is a compile-time choice: the radar (default), the FEATURE_EAM monitor, the
-// FEATURE_SPACE (Spacescope) monitor, the FEATURE_SEISMIC earthquake radar, or the FEATURE_BIRDING
-// sightings radar. All expose the same Initialise()/Update()/Draw() surface, so loop() drives
-// `appManager` without knowing which it is. The radar's sweep/models headers are radar-only.
+// FEATURE_SPACE (Spacescope) monitor, the FEATURE_SEISMIC earthquake radar, the FEATURE_BIRDING
+// sightings radar, or the FEATURE_ANGLER solunar fishing companion. All expose the same
+// Initialise()/Update()/Draw() surface, so loop() drives `appManager` without knowing which it is.
+// The radar's sweep/models headers are radar-only.
 #if defined(FEATURE_EAM)
 #include "eam/EamManager.h"
 #elif defined(FEATURE_SPACE)
@@ -25,6 +26,8 @@
 #include "seismic/SeismicManager.h"
 #elif defined(FEATURE_BIRDING)
 #include "birding/BirdingManager.h"
+#elif defined(FEATURE_ANGLER)
+#include "angler/AnglerManager.h"
 #else
 #include "AircraftManager.h"
 #include "DrawHelpers.h"
@@ -48,6 +51,8 @@ SpaceManager appManager(configServer, authHandler, http, tft);
 SeismicManager appManager(configServer, authHandler, http, tft);
 #elif defined(FEATURE_BIRDING)
 BirdingManager appManager(configServer, authHandler, http, tft);
+#elif defined(FEATURE_ANGLER)
+AnglerManager appManager(configServer, authHandler, http, tft);
 #else
 AircraftManager appManager(configServer, authHandler, http, tft);
 #endif
@@ -243,7 +248,7 @@ void loop()
   // backbuffer, each shifted into place by a BandCanvas, then pushed to its screen
   // rows. The scene is drawn once per band; the app advances per-frame state (animation
   // tick, trail sampling) only on the first pass so the bands stay in sync.
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
   String renderScanlines = configServer.GetStoredString("scanline");
   const bool drawScan = (renderScanlines.isEmpty() || renderScanlines == "true") && appManager.IsRadarView();
 
@@ -259,7 +264,7 @@ void loop()
 
     canvas.fillScreen(lgfx::color888(0, 0, 0));
 
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
     if (drawScan)
       DrawRadarSweep(canvas, SCREEN_SIZE_DIV_2 - 1, SCREEN_SIZE_DIV_2 - 1, SCREEN_SIZE_DIV_2, sweep);
 #endif

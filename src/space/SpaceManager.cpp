@@ -5,7 +5,7 @@
 #include <Sgp4.h>
 
 #include "Layout.h"
-#include "Astro.h"
+#include "astro/Astro.h"
 #include "Board.h"
 
 // Optional Valar space-feed backend base URL default. Normally NOT injected (Spacescope talks

@@ -5,7 +5,7 @@
 
 #include "Layout.h"
 #include "SpaceStars.h"
-#include "Astro.h"
+#include "astro/Astro.h"
 
 // The Spacescope screens. Each draws one full frame into the band canvas in absolute screen
 // coordinates (the S3 renders a single full-height band). Colours come from the palette scaled by
