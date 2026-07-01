@@ -2,7 +2,7 @@
 #include <ESPmDNS.h>
 #include "DeviceIdentity.h"
 #include "OtaUpdater.h"
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
 #include "AircraftInfoFields.h"   // radar-only; filtered out of the FEATURE_EAM/FEATURE_SPACE builds
 #endif
 
@@ -59,12 +59,28 @@ static const SpaceScreenDef SPACE_SCREEN_DEFS[] = {
 static const size_t SPACE_SCREEN_DEF_COUNT = sizeof(SPACE_SCREEN_DEFS) / sizeof(SPACE_SCREEN_DEFS[0]);
 #endif
 
+#ifdef FEATURE_ANGLER
+// User-toggleable Angler screens, in canonical rotation order. Drives the config-page on/off
+// checkbox grid (one "scr-<id>" box each) and the save that rebuilds the "ang-screens" CSV. Ids
+// must match AnglerManager::idToScreen; "splash" is intentionally excluded (internal cold-start
+// card). Keep in sync with AnglerManager's Screen list. Stage 1 is the on-device solunar/sun/moon
+// set; later stages add tides / barometer / wind / water / catch-log rows here.
+struct AnglerScreenDef { const char* id; const char* label; };
+static const AnglerScreenDef ANGLER_SCREEN_DEFS[] = {
+    {"bite",  "Bite forecast (solunar)"},
+    {"moon",  "Moon phase & rise/set"},
+    {"sun",   "Sun & golden hour"},
+    {"clock", "Local clock"},
+};
+static const size_t ANGLER_SCREEN_DEF_COUNT = sizeof(ANGLER_SCREEN_DEFS) / sizeof(ANGLER_SCREEN_DEFS[0]);
+#endif
+
 // HTML stored in flash
 // %PLACEHOLDER% tokens are substituted at serve time by the template processor.
 // The page is feature-specific: the radar build serves the radar settings form below; the
 // FEATURE_EAM build serves the EAM monitor form; the FEATURE_SPACE build serves the Spacescope
 // form. The ConfigurationWebServer shell (NVS namespace, mDNS, /reset-wifi, save flag) is shared.
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
 static const char CONFIG_HTML[] PROGMEM = R"(
 <html>
     <head>
@@ -1011,6 +1027,111 @@ static const char CONFIG_HTML[] PROGMEM = R"(
     </body>
 </html>
 )";
+#elif defined(FEATURE_ANGLER)
+// FEATURE_ANGLER (Angler edition) config page: location, timezone, screen on/off grid, ntfy alerts,
+// display. Stage 1 is fully on-device (solunar/sun/moon) so there are NO API keys and no backend
+// field here; later stages add a tide station + units. Shares the page chrome / JS pattern.
+static const char CONFIG_HTML[] PROGMEM = R"(
+<html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Configure Blipscope Angler</title>
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='rgb(4,20,20)'/><path d='M2 11 Q5 8 8 11 T14 11' fill='none' stroke='rgb(90,220,200)' stroke-width='1.1'/><circle cx='11' cy='4.5' r='2' fill='none' stroke='rgb(255,210,120)' stroke-width='1'/></svg>">
+        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.0"></script>
+    </head>
+    <body class="font-mono bg-gray-900 text-teal-300 min-h-screen p-4 sm:p-0 text-md sm:text-sm">
+        <fieldset class="border border-teal-400 p-5 w-full max-w-2xl mx-auto sm:m-10">
+            <legend class="px-2">Configure Blipscope &mdash; Angler</legend>
+
+            <form id="cfg" action="/save" method="POST" class="flex flex-col gap-4 sm:gap-2">
+
+                <div class="flex flex-col sm:flex-row gap-4 sm:gap-5">
+                    <label class="flex flex-col sm:flex-row gap-2 flex-1">
+                        <span>Latitude:</span>
+                        <input name="latitude" type="number" min="-90" step="0.000001" max="90" value='%LATITUDE%'
+                            class="border border-teal-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                    <label class="flex flex-col sm:flex-row gap-2 flex-1">
+                        <span>Longitude:</span>
+                        <input name="longitude" type="number" min="-180" step="0.000001" max="180" value='%LONGITUDE%'
+                            class="border border-teal-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                </div>
+                <span class="text-xs text-teal-600">Your location drives the whole edition &mdash; the solunar bite forecast, moonrise/set, sunrise/sunset, and the night auto-dim are all computed on-device from it. Set it before anything is useful.</span>
+
+                <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                    <span>UTC offset (hours, for local times):</span>
+                    <input name="tz-offset" type="number" min="-14" max="14" step="0.5" value='%TZ_OFFSET%'
+                        class="border border-teal-400 bg-gray-900 w-full sm:w-24 px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                </label>
+                <span class="text-xs text-teal-600">Bite windows, rise/set and the clock are shown in this local time. Defaults to the nominal zone from your longitude; set it (incl. DST) for exact times.</span>
+
+                <fieldset class="border border-teal-400 p-3">
+                    <legend class="px-2">Screens</legend>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        %ANGLER_SCREENS_HTML%
+                    </div>
+                    <span class="text-xs text-teal-600 mt-2 block">Unchecked screens are skipped in the rotation. The device auto-cycles the enabled ones; swipe to move manually and tap for detail.</span>
+                </fieldset>
+
+                <fieldset class="border border-teal-400 p-3">
+                    <legend class="px-2">Alerts (ntfy)</legend>
+                    <label class="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <span>ntfy.sh topic:</span>
+                        <input name="ntfy-topic" value='%NTFY_TOPIC%'
+                            class="flex-1 border border-teal-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    </label>
+                    <div class="grid grid-cols-1 gap-2 mt-3">
+                        <label class="flex items-center gap-2"><input name="ang-alert-bite" type="checkbox" %AL_BITE% class="accent-teal-400"><span>A major bite window is opening</span></label>
+                        <label class="flex items-center gap-2"><input name="ang-chime" type="checkbox" %AL_CHIME% class="accent-teal-400"><span>Also chime the speaker on alerts</span></label>
+                    </div>
+                    <span class="text-xs text-teal-600 mt-1">Leave the topic blank to disable push alerts (the speaker chime still works). Alerts need a location above.</span>
+                </fieldset>
+
+                <fieldset class="border border-teal-400 p-3">
+                    <legend class="px-2">Display</legend>
+                    <div class="flex flex-col sm:flex-row gap-4 sm:gap-8">
+                        <label class="flex items-center gap-2"><input name="autodim" type="checkbox" %AUTODIM% class="accent-teal-400"><span>Auto-dim at night</span></label>
+                    </div>
+                    <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2 mt-3">
+                        <span>Brightness:</span>
+                        <input name="brightness" type="range" min="10" max="255" value='%BRIGHTNESS%' class="flex-1 w-full accent-teal-400">
+                    </label>
+                </fieldset>
+
+                <div class="flex flex-col sm:flex-row gap-4 sm:gap-5">
+                    <input type="submit" value="Save"
+                        class="bg-teal-400 text-black mt-4 px-4 py-3 text-lg sm:text-base sm:px-2 sm:py-0 self-start cursor-pointer">
+                    <button type="button" id="resetwifi"
+                        class="border border-red-500 text-red-500 mt-4 px-4 py-3 text-lg sm:text-base sm:px-2 sm:py-0 self-start cursor-pointer">
+                        Reset WiFi</button>
+                    <div id="result" class="mt-4 px-1 sm:px-10"></div>
+                </div>
+            </form>
+
+            <div class="flex justify-between items-end text-xs text-teal-600 mt-4">
+                <a href="https://github.com/Valar-Systems/Blipscope/wiki" target="_blank" rel="noopener" class="text-teal-300 underline">Help &amp; documentation</a>
+                <span>Firmware v%FW_VERSION% (Angler)</span>
+            </div>
+        </fieldset>
+
+        <script>
+            document.getElementById('cfg').addEventListener('submit', function(e) {
+                e.preventDefault();
+                fetch(this.action, { method: 'POST', body: new FormData(this) })
+                    .then(r => r.text())
+                    .then(html => document.getElementById('result').innerHTML = html);
+            });
+            document.getElementById('resetwifi').addEventListener('click', function() {
+                if (!confirm('Forget WiFi credentials and restart into setup mode? You will need to reconnect the device to a network.')) return;
+                fetch('/reset-wifi', { method: 'POST' })
+                    .then(r => r.text())
+                    .then(html => document.getElementById('result').innerHTML = html);
+            });
+        </script>
+    </body>
+</html>
+)";
 #endif
 
 void ConfigurationWebServer::Initialise() {
@@ -1038,7 +1159,7 @@ void ConfigurationWebServer::Initialise() {
 
         // read all values up front so the processor lambda can capture by value
         prefs.begin("config", true);
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
         const String latitude = prefs.getString("latitude", "");
         const String longitude = prefs.getString("longitude", "");
         const String radius = prefs.getString("radius", "100");
@@ -1194,10 +1315,47 @@ void ConfigurationWebServer::Initialise() {
         const String alertTarget = prefs.isKey("bd-alert-target") ? prefs.getString("bd-alert-target", "true") : "true";
         const String autoDimEnabled = prefs.isKey("autodim") ? prefs.getString("autodim", "true") : "true";
         const String brightness = prefs.getString("brightness", "255");
+#elif defined(FEATURE_ANGLER)
+        // FEATURE_ANGLER: load the Angler edition config fields. isKey() guards keep not-yet-saved
+        // reads from logging NVS NOT_FOUND. Stage 1 is fully on-device (no API keys, no backend).
+        const String latitude = prefs.getString("latitude", "");
+        const String longitude = prefs.getString("longitude", "");
+        // default the local-time offset (bite windows / rise-set / clock) to the nominal zone from
+        // longitude (15 deg/hour); the user can override it with the real offset incl. DST.
+        const String tzOffset = prefs.isKey("tz-offset")
+            ? prefs.getString("tz-offset", "0")
+            : String((int)round(longitude.toFloat() / 15.0));
+        const String ntfyTopic = prefs.getString("ntfy-topic", "");
+        const String alertBite = prefs.isKey("ang-alert-bite") ? prefs.getString("ang-alert-bite", "true") : "true";
+        const String chimeOnAlert = prefs.isKey("ang-chime") ? prefs.getString("ang-chime", "true") : "true";
+        const String autoDimEnabled = prefs.isKey("autodim") ? prefs.getString("autodim", "true") : "true";
+        const String brightness = prefs.getString("brightness", "255");
+        const String anglerScreens = prefs.isKey("ang-screens")
+            ? prefs.getString("ang-screens", "")
+            : String("bite,moon,sun,clock");
+
+        // Build the screen on/off checkbox grid from the canonical table, reflecting the saved CSV
+        // (empty = all on, matching AnglerManager). Each box is "scr-<id>"; the save rebuilds the CSV.
+        const bool anglerScreensAll = anglerScreens.isEmpty();
+        String anglerScreensCsv = "," + anglerScreens + ",";
+        anglerScreensCsv.replace(" ", "");
+        anglerScreensCsv.toLowerCase();
+        String anglerScreensHtml;
+        for (size_t i = 0; i < ANGLER_SCREEN_DEF_COUNT; ++i) {
+            const AnglerScreenDef& s = ANGLER_SCREEN_DEFS[i];
+            const bool on = anglerScreensAll || anglerScreensCsv.indexOf("," + String(s.id) + ",") >= 0;
+            anglerScreensHtml += F("<label class=\"flex items-center gap-2\"><input type=\"checkbox\" class=\"accent-teal-400\" name=\"scr-");
+            anglerScreensHtml += s.id;
+            anglerScreensHtml += '"';
+            if (on) anglerScreensHtml += F(" checked");
+            anglerScreensHtml += F("><span>");
+            anglerScreensHtml += s.label;
+            anglerScreensHtml += F("</span></label>");
+        }
 #endif
         prefs.end();
 
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
         // mask secrets before sending to client
         std::fill(openskySecret.begin(), openskySecret.end(), '*');
         std::fill(mqttPass.begin(), mqttPass.end(), '*');
@@ -1211,7 +1369,7 @@ void ConfigurationWebServer::Initialise() {
         // FEATURE_SPACE has no secret fields yet (no API keys until the key-gated screens land).
 
         // template processor called once per %PLACEHOLDER% token found in CONFIG_HTML.
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
@@ -1359,6 +1517,25 @@ void ConfigurationWebServer::Initialise() {
                 return "";
             }
         );
+#elif defined(FEATURE_ANGLER)
+        AsyncWebServerResponse* response = request->beginResponse(
+            200, "text/html",
+            (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
+            [latitude, longitude, tzOffset, ntfyTopic, alertBite, chimeOnAlert, autoDimEnabled, brightness, anglerScreensHtml]
+            (const String& var) -> String {
+                if (var == "LATITUDE")            return latitude;
+                if (var == "LONGITUDE")           return longitude;
+                if (var == "TZ_OFFSET")           return tzOffset;
+                if (var == "NTFY_TOPIC")          return ntfyTopic;
+                if (var == "AL_BITE")             return alertBite == "true" ? "checked" : "";
+                if (var == "AL_CHIME")            return chimeOnAlert == "true" ? "checked" : "";
+                if (var == "AUTODIM")             return autoDimEnabled == "true" ? "checked" : "";
+                if (var == "BRIGHTNESS")          return brightness;
+                if (var == "ANGLER_SCREENS_HTML") return anglerScreensHtml;
+                if (var == "FW_VERSION")          return String(FW_VERSION);
+                return "";
+            }
+        );
 #endif
         // never cache the config page: a stale copy (e.g. predating a new option)
         // would hide controls and, once submitted, silently clear the missing fields
@@ -1383,7 +1560,7 @@ void ConfigurationWebServer::Initialise() {
 
         prefs.begin("config", false);
 
-#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING)
+#if !defined(FEATURE_EAM) && !defined(FEATURE_SPACE) && !defined(FEATURE_SEISMIC) && !defined(FEATURE_BIRDING) && !defined(FEATURE_ANGLER)
         TrySaveParam("latitude");
         TrySaveParam("longitude");
         TrySaveParam("radius");
@@ -1538,6 +1715,32 @@ void ConfigurationWebServer::Initialise() {
             if (k.indexOf('*') == -1)
                 prefs.putString("ebird-key", k);
         }
+#elif defined(FEATURE_ANGLER)
+        // FEATURE_ANGLER: persist the Angler edition config fields.
+        TrySaveParam("latitude");
+        TrySaveParam("longitude");
+        TrySaveParam("tz-offset");
+        TrySaveParam("ntfy-topic");
+        TrySaveParam("brightness");
+
+        // Screens: rebuild the CSV from the per-screen checkboxes (canonical order). Unchecked boxes
+        // are absent from the body, so hasParam() is the on/off signal. All-off saves "clock" so the
+        // device still shows the idle clock instead of "empty CSV = all on".
+        {
+            String csv;
+            for (size_t i = 0; i < ANGLER_SCREEN_DEF_COUNT; ++i) {
+                if (request->hasParam(String("scr-") + ANGLER_SCREEN_DEFS[i].id, true)) {
+                    if (csv.length()) csv += ",";
+                    csv += ANGLER_SCREEN_DEFS[i].id;
+                }
+            }
+            prefs.putString("ang-screens", csv.isEmpty() ? String("clock") : csv);
+        }
+
+        // checkboxes: absent in the body when unchecked, so hasParam() is the on/off signal
+        prefs.putString("ang-alert-bite", request->hasParam("ang-alert-bite", true) ? "true" : "false");
+        prefs.putString("ang-chime", request->hasParam("ang-chime", true) ? "true" : "false");
+        prefs.putString("autodim", request->hasParam("autodim", true) ? "true" : "false");
 #endif
         prefs.end();
 
